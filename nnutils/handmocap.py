@@ -7,10 +7,6 @@ import os
 import os.path as osp
 import numpy as np
 import torch
-import sys
-
-sys.path.append('externals/frankmocap', )
-sys.path.append('externals/frankmocap/detectors/body_pose_estimator/', )
 
 from handmocap.hand_mocap_api import HandMocap
 from handmocap.hand_bbox_detector import HandBboxDetector
@@ -33,6 +29,36 @@ def get_handmocap_predictor(
 
 
 def process_mocap_predictions(mocap_predictions, image, hand_wrapper=None, mask=None):
+    """
+
+    Args:
+        mocap_predictions (dict): 
+            - left_hand/right_hand dict
+                pred_vertices_smpl (778, 3)
+                pred_joints_smpl (21, 3)
+                faces (1538, 3)
+                bbox_scale_ratio ()
+                bbox_top_left (2,)
+                pred_camera (3,)
+                img_cropped (224, 224, 3)
+                pred_hand_pose (1, 48)
+                pred_hand_betas (1, 10)
+                pred_vertices_img (778, 3)
+                pred_joints_img (21, 3)
+        image (ndarray): (H, W, 3)
+        hand_wrapper : ManopthWrapper()
+        mask (ndarray): (H, W)
+
+    Returns:
+        data = 
+            'cTh':  Tensor (1, 4, 4), from hand to camera ?
+            'hA':   Tensor (1, 45), Mano Pose
+            'image': Tensor (1, 3, 224, 224),
+            'obj_mask': ndarray (H, W),
+            'cam_f': Tensor (2,), [fx, fx]
+            'cam_p': Tensor (2,), [0, 0]
+        }
+    """
     if hand_wrapper is None:
         hand_wrapper = ManopthWrapper().to('cpu')
     one_hand = mocap_predictions[0]['right_hand']
@@ -52,7 +78,7 @@ def process_mocap_predictions(mocap_predictions, image, hand_wrapper=None, mask=
     
     cTh, cam_f, cam_p = get_camera(one_hand['pred_camera'], one_hand['bbox_top_left'], one_hand['bbox_scale_ratio'], hoi_bbox, hand_wrapper, hA, rot)
     crop = image_utils.crop_resize(image, hoi_bbox, return_np=False)
-    crop = ToTensor()(crop)[None] * 2 - 1
+    crop = ToTensor()(crop)[None] * 2 - 1  # Tensor(1, 3, 224, 224)
 
     if mask is None:
         mask = torch.ones([1, 1, crop.shape[-2], crop.shape[-1]])
@@ -80,6 +106,21 @@ def get_handmocap_detector(view_type='ego_centric'):
 
 
 def get_camera(pred_cam, hand_bbox_tl, bbox_scale, bbox, hand_wrapper, hA, rot, fx=10):
+    """ 
+    Args:
+        pred_cam    (ndarray):  (3,)
+        hand_bbox_tl(ndarray):  (2,), int64, hand box top and left
+        bbox_scale  (float):    scalar 
+        bbox        (ndarray):  float32, (4,)
+        hand_wrapper         :  ManopthWrapper
+        hA     (torch.Tensor):  Mano Pose (1, 45)
+        rot    (torch.Tensor):  Mano Rotation (1, 3)
+    
+    Returns:
+        cTh: from hand to camera space (?)
+        f: focal length (1, 2) 
+        p: (1, 2) zeros
+    """
     new_center = (bbox[0:2] + bbox[2:4]) / 2
     new_size = max(bbox[2:4] - bbox[0:2])
     cam, topleft, scale = image_utils.crop_weak_cam(
@@ -92,7 +133,7 @@ def get_camera(pred_cam, hand_bbox_tl, bbox_scale, bbox, hand_wrapper, hA, rot, 
     translate = torch.FloatTensor([[tx, ty, fx/s]])
     
     _, joints = hand_wrapper(
-        geom_utils.matrix_to_se3(geom_utils.axis_angle_t_to_matrix(rot)), 
+        geom_utils.matrix_to_se3(geom_utils.axis_angle_t_to_matrix(rot)), # (1,3)->(1,4,4)-> (1,12)
         hA)
     
     print(translate.shape, joints.shape)

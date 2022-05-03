@@ -61,10 +61,16 @@ def crop_weak_cam(cam, bbox_topleft, oldo2n,
     new_center, new_size, old_size=224, resize=224):
     """
     Args:
-        cam ([type]): [description]
-        bbox_topleft ([type]): [description]
-        scale ([type]): [description]
-        new_bbox ([type]): [description] 
+        cam ([type]): (3,) [cam_scale, cam_trans_x, cam_tran_y]
+        bbox_topleft ([type]): (2,), int64, hand box top and left
+        oldo2n: float scalar for bbox_scale
+        new_center: (2,)
+        new_size:   (2,)
+    
+    Returns:
+        new_cam: (3,)
+        new_tl: (2,)
+        new_scale: float
     """
     cam = cam.copy()
     s, t = np.split(cam, [1, ], -1)
