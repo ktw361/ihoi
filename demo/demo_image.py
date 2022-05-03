@@ -6,10 +6,7 @@ from demo import demo_utils
 import numpy as np
 from PIL import Image
 
-import sys
 from nnutils.hand_utils import ManopthWrapper
-sys.path.append('externals/frankmocap/')
-sys.path.append('externals/frankmocap/detectors/body_pose_estimator/')
 
 from renderer.screen_free_visualizer import Visualizer
 
@@ -47,21 +44,21 @@ def main(args):
     image = Image.open(args.filename).convert("RGB")
     image = np.array(image)
     print(image.shape)
-    
+
     # precit hand
     bbox_detector = get_handmocap_detector(args.view)
     detect_output = bbox_detector.detect_hand_bbox(image[..., ::-1].copy())
     body_pose_list, body_bbox_list, hand_bbox_list, raw_hand_bboxes = detect_output
     res_img = visualizer.visualize(image, hand_bbox_list = hand_bbox_list)
     demo_utils.save_image(res_img, osp.join(args.out, 'hand_bbox.jpg'))
-    
+
     hand_predictor = get_handmocap_predictor()
     mocap_predictions = hand_predictor.regress(
         image[..., ::-1], hand_bbox_list
     )
-    # MOW model also takes in masks but currently we feed in all 1. You could specify masks yourself, 
-    # or if you have bounding box for object masks, we can convert it to masks 
-    
+    # MOW model also takes in masks but currently we feed in all 1. You could specify masks yourself,
+    # or if you have bounding box for object masks, we can convert it to masks
+
     # mask_predictor = box2mask.setup_model()
     # boxes = # object_bbox
     # boxes = BoxMode.convert(boxes, BoxMode.XYWH_ABS, BoxMode.XYXY_ABS)
@@ -77,7 +74,7 @@ def main(args):
     hoi_predictor = get_hoi_predictor(args)
     output = hoi_predictor.forward_to_mesh(data)
     vis_hand_object(output, data, image, args.out + '/%s' % osp.basename(args.filename).split('.')[0])
-    
+
 
 if __name__ == "__main__":
     main(get_args())

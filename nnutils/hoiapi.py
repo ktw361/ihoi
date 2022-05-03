@@ -33,6 +33,25 @@ class Predictor:
         self.hand_wrapper = ManopthWrapper().to(device)
     
     def forward_to_mesh(self, batch):
+        """ 
+        Args:
+            batch: dict
+                - cTh torch.Size([1, 12])
+                - hA torch.Size([1, 45])
+                - image torch.Size([1, 3, 224, 224])
+                - obj_mask torch.Size([1, 1, 224, 224])
+                - cam_f torch.Size([1, 2])
+                - cam_p torch.Size([1, 2])
+        
+        Returns:
+            out: dict
+                - hObj: nn_utils.my_pytorch3d.Mesh
+                - hHand: nn_utils.my_pytorch3d.Mesh
+                - jsTx: Tensor (1, 16, 4, 4)
+                - image_feat: tuple of ((1, 256), (1, 256, 56, 56)
+
+
+        """
         model = self.model
         cfg = self.model.cfg
         hand_wrapper = self.hand_wrapper
