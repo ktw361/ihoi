@@ -17,3 +17,5 @@ chumpy
 jupyter_bbox_widget
 pytorch-lightning==1.2
 jupyter
+pandas
+pudb==2022.1
