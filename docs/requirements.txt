@@ -15,6 +15,7 @@ chumpy
 jupyter_bbox_widget
 jupyter
 trimesh
-submitit
 easydict
 omegaconf
+pandas
+pudb==2022.1
