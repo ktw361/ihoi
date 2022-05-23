@@ -31,6 +31,8 @@ def get_handmocap_predictor(
 def process_mocap_predictions(mocap_predictions, image, hand_wrapper=None, mask=None):
     """
 
+    Note ToTensor() will convert mask value 255 to 1
+
     Args:
         mocap_predictions (dict): 
             - left_hand/right_hand dict

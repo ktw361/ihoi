@@ -23,6 +23,9 @@ def get_args():
         default='/home/skynet/Zhifan/data/epic_analysis/clean_frame_debug.txt')
     parser.add_argument("--out", default="output", help="Dir to save output.")
     parser.add_argument("--view", default="ego_centric", help="Dir to save output.")
+    parser.add_argument("--merge_hand_mask", dest='merge_hand_mask', action='store_true')
+    parser.add_argument("--no-merge_hand_mask", dest='merge_hand_mask', action='store_false')
+    parser.set_defaults(merge_hand_mask=True)
 
     parser.add_argument(
         "--experiment",
@@ -39,7 +42,9 @@ def get_args():
 def main(args):
 
     # visualizer = Visualizer('pytorch3d')
-    dataset = EpicInference(image_sets=args.image_sets)
+    dataset = EpicInference(
+        image_sets=args.image_sets,
+        merge_hand_mask=args.merge_hand_mask)
     # bbox_detector = get_handmocap_detector(args.view)
     
     for idx, (image, hand_bbox_list, object_mask) in enumerate(dataset):
@@ -52,8 +57,7 @@ def main(args):
         mocap_predictions = hand_predictor.regress(
             image[..., ::-1], hand_bbox_list
         )
-
-        object_mask = np.ones_like(image[..., 0]) * 255
+        # object_mask = np.ones_like(image[..., 0]) * 255
 
         # predict hand-held object
         hand_wrapper = ManopthWrapper().to('cpu')

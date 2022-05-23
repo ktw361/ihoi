@@ -21,3 +21,10 @@ git clone --branch v0.6 https://github.com/facebookresearch/detectron2.git detec
 pip install -e detectron2
 cd ../
 # See https://detectron2.readthedocs.io/tutorials/install.html for other installation options
+
+
+# install neural_renderer and sdf for HOMAN
+mkdir -p external
+git clone https://github.com/hassony2/multiperson.git externals/multiperson
+pip install externals/multiperson/neural_renderer
+pip install externals/multiperson/sdf
