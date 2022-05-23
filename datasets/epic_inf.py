@@ -10,6 +10,18 @@ from datasets.epic_lib import epichoa
 
 """ Epic-Kitchens Inference Datasetf """
 
+epic_cats = [
+    '_bg',
+    'left hand',
+    'right hand',
+    'can',
+    'cup',
+    'plate',
+    'bottle',
+    'mug',
+    'bowl',
+]
+
 
 def row2xywh(row):
     wid = row.right - row.left
@@ -23,7 +35,8 @@ class EpicInference(Dataset):
                  image_sets='/home/skynet/Zhifan/data/epic_analysis/interpolation',
                  epic_root='/home/skynet/Zhifan/datasets/epic',
                  mask_dir='/home/skynet/Zhifan/data/epic_analysis/interpolation',
-                 image_size=(640, 360),
+                 image_size=(1280, 720), # (640, 360),
+                 merge_hand_mask=False,
                  *args,
                  **kwargs):
         """_summary_
@@ -34,12 +47,14 @@ class EpicInference(Dataset):
             hoa_root (str): 
             mask_dir (str): 
             image_size: Tuple of (W, H)
+            merge_hand_mask (bool): whether to merge hand mask into object mask
         """
         super(EpicInference, self).__init__(*args, **kwargs)
         self.epic_rgb_root = osp.join(epic_root, 'rgb_root')
         self.mask_dir = mask_dir
         self.hoa_root = osp.join(epic_root, 'hoa')
         self.image_size = image_size
+        self.merge_hand_mask = merge_hand_mask
 
         self.box_scale = np.asarray(image_size * 2) / ((1920, 1080) * 2)
         self.data_infos = self._read_image_sets(image_sets)
@@ -110,7 +125,10 @@ class EpicInference(Dataset):
         mask = Image.open(path).convert('P')
         mask = mask.resize(self.image_size, Image.NEAREST)
         mask = np.asarray(mask, dtype=np.uint8)
-        # TODO: object mask?
+        mask_merged = np.zeros_like(mask)
+        if self.merge_hand_mask:
+            mask_merged[mask == epic_cats.index(side + ' hand')] = 255
+        mask_merged[mask == epic_cats.index(cat)] = 255
 
         hand_entries = self._get_hand_entries(vid, frame_idx)
         hand_entry = hand_entries[hand_entries.side == side].iloc[0]
@@ -118,10 +136,10 @@ class EpicInference(Dataset):
         r_hand = r_hand * self.box_scale
         hand_bbox_list = [dict(right_hand=r_hand, left_hand=None)]
 
-        return image, hand_bbox_list, mask
+        return image, hand_bbox_list, mask_merged
     
 
-# if __name__ == '__main__':
-#     dataset = EpicInference(
-#         image_sets='/home/skynet/Zhifan/data/epic_analysis/clean_frame_debug.txt')
-#     print(dataset[0])
+if __name__ == '__main__':
+    dataset = EpicInference(
+        image_sets='/home/skynet/Zhifan/data/epic_analysis/clean_frame_debug.txt')
+    print(dataset[0])
