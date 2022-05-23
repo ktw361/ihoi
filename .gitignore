@@ -12,5 +12,6 @@ __pycache__/
 *.fuse*
 CC/data
 output/
+output
 externals/
 .env
