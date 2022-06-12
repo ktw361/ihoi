@@ -85,7 +85,7 @@ def compute_dist_z(verts1, verts2):
     return torch.min(torch.abs(c - b), torch.abs(a - d))
 
 
-def compute_random_rotations(B=10, upright=False):
+def compute_random_rotations(B=10, upright=False, device='cuda'):
     """
     Randomly samples rotation matrices.
 
@@ -98,6 +98,7 @@ def compute_random_rotations(B=10, upright=False):
         rotation_matrices (B x 3 x 3).
     """
     if upright:
+        raise NotImplementedError
         a1 = torch.FloatTensor(B, 1).uniform_(0, 2 * math.pi)
         a2 = torch.FloatTensor(B, 1).uniform_(-math.pi / 6, math.pi / 6)
         a3 = torch.FloatTensor(B, 1).uniform_(-math.pi / 12, math.pi / 12)
@@ -106,7 +107,7 @@ def compute_random_rotations(B=10, upright=False):
         rotation_matrices = euler_angles_to_matrix(angles, "YXZ")
     else:
         # Reference: J Avro. "Fast Random Rotation Matrices." (1992)
-        x1, x2, x3 = torch.split(torch.rand(3 * B).cuda(), B)
+        x1, x2, x3 = torch.split(torch.rand(3 * B, device=device), B)
         tau = 2 * math.pi
         R = torch.stack(
             (  # B x 3 x 3
@@ -127,7 +128,7 @@ def compute_random_rotations(B=10, upright=False):
             ),
             1,
         )
-        identity = torch.eye(3).repeat(B, 1, 1).cuda()
+        identity = torch.eye(3, device=device).repeat(B, 1, 1)
         H = identity - 2 * v.unsqueeze(2) * v.unsqueeze(1)
         rotation_matrices = -torch.matmul(H, R)
     return rotation_matrices
