@@ -36,7 +36,7 @@ class EpicInference(Dataset):
                  epic_root='/home/skynet/Zhifan/datasets/epic',
                  mask_dir='/home/skynet/Zhifan/data/epic_analysis/interpolation',
                  image_size=(1280, 720), # (640, 360),
-                 merge_hand_mask=False,
+                 merge_hand_mask=True,
                  *args,
                  **kwargs):
         """_summary_
@@ -82,7 +82,6 @@ class EpicInference(Dataset):
             data_infos.append((
                 vid, nid, st_frame, cat, side))
         
-        
         return data_infos
 
     def __len__(self):
@@ -98,6 +97,16 @@ class EpicInference(Dataset):
         entries = entries[entries.det_type == 'hand']
         return entries
 
+    def _get_obj_entries(self, vid, frame_idx):
+        if vid in self.hoa_df:
+            vid_df = self.hoa_df[vid]
+        else:
+            vid_df = epichoa.load_video_hoa(vid, self.hoa_root)
+            self.hoa_df[vid] = vid_df
+        entries = vid_df[vid_df.frame == frame_idx]
+        entries = entries[entries.det_type == 'object']
+        return entries
+
     def get_vid_frame(self, index):
         """ 
         Given an index, we also want to know which vid & frame 
@@ -111,9 +120,12 @@ class EpicInference(Dataset):
         Returns:
             image: ndarray (H, W, 3) RGB
                 note frankmocap requires `BGR` input
-            hand_bbox_list: list of dict, len 1
+            hand_bbox_dict: dict
                 - left_hand/right_hand: ndarray (4,) of (x1, y1, w, h)
-            object_mask: (H, W)
+            obj_bbox_arr: (4,) xywh
+            object_mask: (H, W) 
+                - fg: 1, ignore -1, bg 0 
+            cat: str, object categroy
         """
         vid, nid, frame_idx, cat, side = self.data_infos[index]
         image = read_epic_image(
@@ -124,19 +136,25 @@ class EpicInference(Dataset):
         path = f'{self.mask_dir}/{vid}/frame_{frame_idx:010d}.png'
         mask = Image.open(path).convert('P')
         mask = mask.resize(self.image_size, Image.NEAREST)
-        mask = np.asarray(mask, dtype=np.uint8)
+        mask = np.asarray(mask, dtype=np.float32)
         mask_merged = np.zeros_like(mask)
         if self.merge_hand_mask:
-            mask_merged[mask == epic_cats.index(side + ' hand')] = 255
-        mask_merged[mask == epic_cats.index(cat)] = 255
+            mask_merged[mask == epic_cats.index(side + ' hand')] = 1
+        else:
+            mask_merged[mask == epic_cats.index(side + ' hand')] = -1
+        mask_merged[mask == epic_cats.index(cat)] = 1
 
         hand_entries = self._get_hand_entries(vid, frame_idx)
         hand_entry = hand_entries[hand_entries.side == side].iloc[0]
         r_hand = row2xywh(hand_entry)
         r_hand = r_hand * self.box_scale
-        hand_bbox_list = [dict(right_hand=r_hand, left_hand=None)]
+        hand_bbox_dict = dict(right_hand=r_hand, left_hand=None)
 
-        return image, hand_bbox_list, mask_merged
+        obj_entries = self._get_obj_entries(vid, frame_idx)
+        obj_entry = obj_entries.iloc[0]
+        obj_bbox_arr = (row2xywh(obj_entry) * self.box_scale).astype(np.float32)
+
+        return image, hand_bbox_dict, obj_bbox_arr, mask_merged, cat
     
 
 if __name__ == '__main__':

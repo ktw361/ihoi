@@ -1,10 +1,6 @@
 import argparse
-import os
 import os.path as osp
-from demo import demo_utils
 
-import numpy as np
-from PIL import Image
 
 # from renderer.screen_free_visualizer import Visualizer
 
@@ -25,13 +21,13 @@ def get_args():
     parser.add_argument("--view", default="ego_centric", help="Dir to save output.")
     parser.add_argument("--merge_hand_mask", dest='merge_hand_mask', action='store_true')
     parser.add_argument("--no-merge_hand_mask", dest='merge_hand_mask', action='store_false')
-    parser.set_defaults(merge_hand_mask=True)
+    parser.set_defaults(merge_hand_mask=False)
 
     parser.add_argument(
         "--experiment",
         "-e",
         dest="experiment_directory",
-        default='weights/mow'
+        default='weights/ho3d'
     )
     parser.add_argument("opts",  default=None, nargs=argparse.REMAINDER)
 
@@ -45,19 +41,15 @@ def main(args):
     dataset = EpicInference(
         image_sets=args.image_sets,
         merge_hand_mask=args.merge_hand_mask)
-    # bbox_detector = get_handmocap_detector(args.view)
     
-    for idx, (image, hand_bbox_list, object_mask) in enumerate(dataset):
-        # print(image.shape)
-
+    for idx, (image, hand_bbox_dict, obj_bbox, object_mask) in enumerate(dataset):
         # res_img = visualizer.visualize(image, hand_bbox_list = hand_bbox_list)
         # demo_utils.save_image(res_img, osp.join(args.out, 'hand_bbox.jpg'))
 
         hand_predictor = get_handmocap_predictor()
         mocap_predictions = hand_predictor.regress(
-            image[..., ::-1], hand_bbox_list
+            image[..., ::-1], [hand_bbox_dict]
         )
-        # object_mask = np.ones_like(image[..., 0]) * 255
 
         # predict hand-held object
         hand_wrapper = ManopthWrapper().to('cpu')

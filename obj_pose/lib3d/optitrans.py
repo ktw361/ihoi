@@ -60,13 +60,14 @@ def compute_optimal_translation(bbox_target, vertices, f=1, img_size=256):
     Returns:
         Optimal 3D translation (B x 3).
     """
+    device = vertices.device
     bbox_mask = np.array(bbox_target)
     mask_center = bbox_mask[:2] + bbox_mask[2:] / 2
     diag_mask = np.sqrt(bbox_mask[2]**2 + bbox_mask[3]**2)
     B = vertices.shape[0]
-    x = torch.zeros(B).cuda()
-    y = torch.zeros(B).cuda()
-    z = 2.5 * torch.ones(B).cuda()
+    x = torch.zeros(B).to(device)
+    y = torch.zeros(B).to(device)
+    z = 2.5 * torch.ones(B).to(device)
     for _ in range(50):
         translation = torch.stack((x, y, z), -1).unsqueeze(1)
         v = vertices + translation

@@ -30,6 +30,7 @@ def get_handmocap_predictor(
 
 def process_mocap_predictions(mocap_predictions, image, hand_wrapper=None, mask=None):
     """
+    Image will be cropped.
 
     Note ToTensor() will convert mask value 255 to 1
 
@@ -71,7 +72,7 @@ def process_mocap_predictions(mocap_predictions, image, hand_wrapper=None, mask=
 
     # obj_bbox = image_utils.mask_to_bbox(mask, 'minmax')
     x1, y1 = one_hand['bbox_top_left'] 
-    bbox_len = 224 / one_hand['bbox_scale_ratio']
+    bbox_len = 224 / one_hand['bbox_scale_ratio']  # i.e. the hand_bbox_list size from dataloader
     x2, y2 = x1 + bbox_len, y1 + bbox_len
     
     hand_bbox = np.array([x1,y1, x2, y2])

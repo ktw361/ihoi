@@ -6,14 +6,27 @@ Origin: homan/pose_optimization.py
 """
 
 import os
+from typing import NamedTuple
 
-import matplotlib.pyplot as plt
-import neural_renderer as nr
+from tqdm import tqdm
+import trimesh
 import numpy as np
-from scipy.ndimage.morphology import distance_transform_edt
 import torch
 import torch.nn as nn
-from tqdm.auto import tqdm
+import matplotlib.pyplot as plt
+import neural_renderer as nr
+from scipy.ndimage.morphology import distance_transform_edt
+
+import torchvision.transforms.functional as F
+import torchvision
+from pytorch3d.transforms import Transform3d
+
+from nnutils import image_utils, geom_utils
+from nnutils.hand_utils import ManopthWrapper
+
+from libzhifan.geometry import (
+    SimpleMesh, CameraManager, projection
+)
 
 from libyana.camutils import project
 from libyana.conversions import npt
@@ -31,9 +44,16 @@ from .utils.geometry import (
     matrix_to_rot6d,
 )
 
+
+class MeshHolder(NamedTuple):
+    vertices: torch.Tensor
+    faces: torch.Tensor
+    
+
 REND_SIZE = 256
 
-class PoseOptimizer(nn.Module):
+
+class PoseRenderer(nn.Module):
     """
     Computes the optimal object pose from an instance mask and an exemplar mesh.
     Closely following PHOSA, we optimize an occlusion-aware silhouette loss
@@ -52,10 +72,13 @@ class PoseOptimizer(nn.Module):
         K=None,
         power=0.25,
         lw_chamfer=0,
+        device='cuda',
     ):
         assert ref_image.shape[0] == ref_image.shape[1], "Must be square."
         super().__init__()
 
+        vertices = torch.as_tensor(vertices, device=device)
+        faces = torch.as_tensor(faces, device=device)
         self.register_buffer("vertices",
                              vertices.repeat(num_initializations, 1, 1))
         self.register_buffer("faces", faces.repeat(num_initializations, 1, 1))
@@ -87,19 +110,21 @@ class PoseOptimizer(nn.Module):
             torch.from_numpy(edt).repeat(num_initializations, 1, 1).float())
         # Setup renderer.
         if K is None:
-            K = torch.cuda.FloatTensor([[[1, 0, 0.5], [0, 1, 0.5], [0, 0, 1]]])
-        rot = torch.eye(3).unsqueeze(0).cuda()
-        trans = torch.zeros(1, 3).cuda()
+            K = torch.FloatTensor([[[1, 0, 0.5], [0, 1, 0.5], [0, 0, 1]]]).to(device)
+        rot = torch.eye(3).unsqueeze(0).to(device)
+        trans = torch.zeros(1, 3).to(device)
         self.renderer = nr.renderer.Renderer(
             image_size=ref_image.shape[0],
             K=K,
-            R=rot,
-            t=trans,
+            R=rot,  # eye(3)
+            t=trans,  # zero
             orig_size=1,
             anti_aliasing=False,
         )
         self.lw_chamfer = lw_chamfer
         self.K = K
+
+        self.to(device)
 
     def apply_transformation(self):
         """
@@ -159,6 +184,271 @@ class PoseOptimizer(nn.Module):
         return images
 
 
+class PoseOptimization:
+
+    OBJ_SCALES = dict(
+        plate=0.3,
+    )
+
+    WEAK_CAM_FX = 10
+
+    FULL_HEIGHT = 720
+    FULL_WIDTH = 1280
+
+    def __init__(self, 
+                 obj_models_root='./weights/obj_models'):
+        self.obj_models_root = obj_models_root
+
+        self.obj_models_cache = dict()
+    
+    def load_obj_by_name(self, name, return_mesh=False, normalize=True):
+        """ 
+        Args:
+            return_mesh: 
+                if True, return an SimpleMesh object that ca
+
+        Returns:
+            a Mesh Object that has attributes:
+                `vertices` and `faces`
+        """
+        if name not in self.obj_models_cache:
+            obj_path = os.path.join(self.obj_models_root, f"{name}.obj")
+            obj_scale = self.OBJ_SCALES[name]
+            obj = trimesh.load(obj_path, force='mesh')
+            verts = np.float32(obj.vertices)
+            verts = verts - verts.mean(0)
+            verts = verts / np.linalg.norm(verts, 2, 1).max() * obj_scale / 2
+            obj_mesh = MeshHolder(vertices=verts, faces=obj.faces)
+            self.obj_models_cache[name] = obj_mesh
+        
+        obj_mesh = self.obj_models_cache[name]
+        
+        if return_mesh:
+            obj_mesh = SimpleMesh(obj_mesh.vertices, obj_mesh.faces)
+        
+        return obj_mesh
+            
+    def calc_hand_mesh(self, 
+                       mocap_predictions,
+                       return_mesh=False):
+        """ wrapper of self._calc_hand_mesh.
+        Given mocap_prediction (a list of dict), compute right_hand mesh.
+
+        Args:
+            return_mesh: if True, returns a SimpleMesh as output hand_mesh
+        """
+        one_hand = mocap_predictions[0]['right_hand']
+        return self._calc_hand_mesh(one_hand, return_mesh=return_mesh)
+
+    def _calc_hand_mesh(self, 
+                        one_hand, 
+                        return_mesh=False,
+                        ):
+        """ 
+
+        When Ihoi predict the MANO params, 
+        it takes the `hand_bbox_list` from dataset,
+        then pad_resize the bbox, which results in the `bbox_processed`.
+
+        The MANO params are predicted in 
+            global_cam.crop(hand_bbox).resize(224, 224),
+        so we need to emulate this process, see CameraManager below.
+
+        Args:
+            one_hand: dict
+                - 'pred_hand_pose'
+                - 'pred_hand_betas': Unused
+
+                - 'pred_camera': used for translate hand_mesh to convert hand_mesh
+                    so that result in a weak perspective camera. 
+
+                - 'bbox_processed': bounding box for hand
+                    this box should be used in mocap_predictor
+            
+            return_mesh: if True, returns a SimpleMesh as output hand_mesh
+        
+        Returns:
+            hand_mesh: (1, V, 3) torch.Tensor
+            hand_camera: CameraManager
+            hand_bbox_proc: (4,) hand bounding box XYWH in original image
+                same as one_hand['bbox_processed']
+            global_camera: CameraManager
+        """
+        hand_wrapper = ManopthWrapper(flat_hand_mean=False).to('cpu')
+
+        pred_hand_pose, pred_hand_betas, pred_camera = map(
+            lambda x: torch.as_tensor(one_hand[x]),
+            ('pred_hand_pose', 'pred_hand_betas', 'pred_camera'))
+        rot_axisang, pred_hand_pose = pred_hand_pose[:, :3], pred_hand_pose[:, 3:]
+
+        glb_rot = geom_utils.matrix_to_se3(
+            geom_utils.axis_angle_t_to_matrix(rot_axisang)) # (1,3)->(1,4,4)-> (1,12)
+        v, _, _, _ = hand_wrapper(None, pred_hand_pose, mode='inner', return_mesh=False)
+        _, joints = hand_wrapper(
+            glb_rot,
+            pred_hand_pose, return_mesh=True)
+        fx = self.WEAK_CAM_FX
+        s, tx, ty = pred_camera
+        translate = torch.FloatTensor([[tx, ty, fx/s]])
+        cTh = geom_utils.axis_angle_t_to_matrix(
+            rot_axisang, translate - joints[:, 5])
+        cTh = Transform3d(matrix=cTh.transpose(1, 2))
+        v = cTh.transform_points(v)
+
+        out_mesh = v
+        if return_mesh:
+            out_mesh = SimpleMesh(v, hand_wrapper.hand_faces, copy_orig=True)
+        hand_bbox_proc = one_hand['bbox_processed']
+        hand_cam = self._hand_cam_from_bbox(hand_bbox_proc)
+        hand_h, hand_w = hand_bbox_proc[2:]
+        hand_cam = self._hand_cam_from_bbox(hand_bbox_proc)
+        global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
+            hand_bbox_proc, self.FULL_HEIGHT, self.FULL_WIDTH
+        )
+        return out_mesh, hand_cam, hand_bbox_proc, global_cam
+    
+    def _hand_cam_from_bbox(self, hand_bbox):
+        """ 
+        Args:
+            hand_bbox: (4,) in global screen space
+                possibly hand_bbox processed after mocap
+        """
+        hand_crop_h = hand_crop_w = 224
+        fx = self.WEAK_CAM_FX
+        hand_cam = CameraManager(
+            fx=fx, fy=fx, cx=0, cy=0, img_h=hand_bbox[2], img_w=hand_bbox[3],
+            in_ndc=True
+        ).resize(hand_crop_h, hand_crop_w)
+        return hand_cam
+
+    def render_model_output(self, 
+                            mocap_predictions, 
+                            fit_model, 
+                            idx: int,
+                            kind: str,
+                            image
+                            ):
+        """ 
+        Args:
+            idx: index into model.apply_transformation()
+            kind: str, one of 
+                - 'global': render w.r.t full image
+                - 'ihoi': render w.r.t image prepared 
+                    according to process_mocap_predictions()
+        """
+        # TODO
+        hand_mesh, hand_camera, hand_bbox_proc, global_cam = \
+            self.calc_hand_mesh(mocap_predictions, return_mesh=True)
+        obj_mesh = SimpleMesh(fit_model.apply_transformation()[idx], fit_model.faces[idx])
+        if kind == 'global':
+            img = projection.perspective_projection_by_camera(
+                [obj_mesh, hand_mesh],
+                global_cam,
+                method=dict(
+                    name='pytorch3d',
+                    coor_sys='nr',
+                    in_ndc=False
+                ),
+                image=image
+            )
+            return img
+        elif kind == 'ihoi':
+            pass
+        else:
+            raise ValueError(f"kind {kind} not unserstood")
+    
+    def optimize_obj_pose(self,
+                          image,
+                          obj_bbox,
+                          object_mask,
+                          cat,
+                          hand_bbox_processed,
+                          global_cam=None,
+                          return_kwargs=False,
+                          ):
+        """ 
+        Args: See EpicInference dataset output.
+            image: (H, W, 3) torch.Tensor. possibly (720, 1280, 3)
+            obj_bbox: (4,)
+            object_mask: (H, W) int ndarray of (-1, 0, 1)
+            cat: str
+            hand_bbox:processed: (4,)
+                Note this differs from `hand_bbox` directly from dataset
+            
+        Returns:
+            PoseRenderer
+        """
+        rend_size = REND_SIZE
+        obj_bbox_expand = 0.5
+
+        """ Get `obj_bbox` and `obj_bbox_sqaured` both in XYWH"""
+        x, y, w, h = obj_bbox
+        obj_bbox_xyxy = np.asarray([x, y, x + w, y + h], dtype=np.float32)
+        obj_bbox_squared_xyxy = image_utils.square_bbox(obj_bbox_xyxy, obj_bbox_expand)
+        _x1, _y1, _x2, _y2 = obj_bbox_squared_xyxy
+        obj_bbox_squared = np.asarray([_x1, _y1, _x2 - _x1, _y2 - _y1], dtype=np.float32)
+
+        """ Get `image` and `mask` """
+        obj_patch = image_utils.crop_resize(
+            image, obj_bbox_squared_xyxy, final_size=rend_size)
+        obj_mask_patch = F.resized_crop(
+            torch.as_tensor(object_mask)[None],
+            int(_y1), int(_x1), int(_y2 - _y1), int(_x2 - _x1), size=[rend_size, rend_size],
+            interpolation=torchvision.transforms.InterpolationMode.NEAREST
+        )[0].numpy()
+
+        """ Get global_camera. """
+        if global_cam is None:
+            hand_h, hand_w = hand_bbox_processed[2:]
+            hand_cam = self._hand_cam_from_bbox(hand_bbox_processed)
+            global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
+                hand_bbox_processed, self.FULL_HEIGHT, self.FULL_WIDTH
+            )
+
+        obj_mesh = self.load_obj_by_name(cat, return_mesh=False)
+        vertices = torch.as_tensor(obj_mesh.vertices, device='cuda')
+        faces = torch.as_tensor(obj_mesh.faces, device='cuda')
+
+        if return_kwargs:
+            return dict(
+                vertices=vertices,
+                faces=faces,
+                bbox=obj_bbox,
+                square_bbox=obj_bbox_squared,
+                image=obj_patch,
+                mask=obj_mask_patch,
+                K=global_cam.get_K(),
+                image_size=(rend_size, rend_size),
+
+                num_initializations=20,
+                num_iterations=20,
+                debug=True,
+                sort_best=False,
+                viz=True,
+
+                global_cam=global_cam,
+            )
+            
+        else:
+            model = find_optimal_pose(
+                vertices=vertices,
+                faces=faces,
+                bbox=obj_bbox,
+                square_bbox=obj_bbox_squared,
+                image=obj_patch,
+                mask=obj_mask_patch,
+                K=global_cam.get_K(),
+                image_size=(rend_size, rend_size),
+
+                num_initializations=20,
+                num_iterations=20,
+                debug=True,
+                sort_best=False,
+                viz=True,
+            )
+            return model
+
+
 def find_optimal_pose(
     vertices,
     faces,
@@ -180,17 +470,18 @@ def find_optimal_pose(
 ):
     """
     Args:
-        vertices:
-        faces:
+        vertices: torch.Tensor
+        faces: torch.Tensor
         mask: 1 for fg, 0 for bg, -1 for ignored
         bbox: XYWH, bbox from original data source. E.g. epichoa
         square_bbox: XYWH, Enlarged and squared from `bbox`
+            The box that matches `mask`
         image_size:
-        K: (3, 3) ndarray
+        K: (3, 3) ndarray, represents the global camera that
+            captures the original image.
         
-
     Returns:
-        A PoseOptimizer Object,
+        A PoseRenderer Object,
             - __call__():
                 returns loss_dict, iou, image
             - render():
@@ -202,14 +493,16 @@ def find_optimal_pose(
             - K
     """
     os.makedirs(viz_folder, exist_ok=True)
+    device = vertices.device
     ts = 1
     textures = torch.ones(faces.shape[0], ts, ts, ts, 3,
-                          dtype=torch.float32).cuda()
+                          dtype=torch.float32, device=device)
     x, y, b, _ = square_bbox
     L = max(image_size[:2])
     camintr_roi = kcrop.get_K_crop_resize(
         torch.Tensor(K).unsqueeze(0), torch.tensor([[x, y, x + b, y + b]]),
-        [REND_SIZE]).cuda()
+        [REND_SIZE]).to(device)
+
     # Stuff to keep around
     best_losses = torch.tensor(np.inf)
     best_rots = None
@@ -225,8 +518,8 @@ def find_optimal_pose(
     # If initial rotation is not provided, it is sampled
     # uniformly from SO3
     if rotations_init is None:
-        rotations_init = compute_random_rotations(num_initializations,
-                                                  upright=False)
+        rotations_init = compute_random_rotations(
+            num_initializations, upright=False, device=device)
 
     # Translation is retrieved by matching the tight bbox of projected
     # vertices with the bbox of the target mask
@@ -238,6 +531,7 @@ def find_optimal_pose(
         bbox, torch.matmul(vertices.unsqueeze(0), rotations_init),
         K).unsqueeze(1)
     if debug:
+        # Debug shows initalized verts on image & mask
         trans_verts = translations_init + torch.matmul(vertices,
                                                        rotations_init)
         proj_verts = project.batch_proj2d(trans_verts,
@@ -283,7 +577,7 @@ def find_optimal_pose(
     # Bring crop K to NC rendering space
     camintr_roi[:, :2] = camintr_roi[:, :2] / REND_SIZE
 
-    model = PoseOptimizer(
+    model = PoseRenderer(
         ref_image=mask,
         vertices=vertices,
         faces=faces,
@@ -293,7 +587,7 @@ def find_optimal_pose(
         num_initializations=num_initializations,
         K=camintr_roi,
     )
-    model.cuda()
+    # model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     for step in range(num_iterations):
         optimizer.zero_grad()
@@ -301,13 +595,9 @@ def find_optimal_pose(
         if debug and (step % viz_step == 0):
             debug_viz_folder = os.path.join(viz_folder, "poseoptim")
             os.makedirs(debug_viz_folder, exist_ok=True)
-            imagify.viz_imgrow(sil,
-                               overlays=[
-                                   mask,
-                               ] * len(sil),
-                               viz_nb=4,
-                               path=os.path.join(debug_viz_folder,
-                                                 f"{step:04d}.png"))
+            imagify.viz_imgrow(
+                sil, overlays=[mask,]*len(sil), viz_nb=4, 
+                path=os.path.join(debug_viz_folder, f"{step:04d}.png"))
 
         losses = sum(loss_dict.values())
         loss = losses.sum()
@@ -344,18 +634,3 @@ def find_optimal_pose(
     model.rotations = nn.Parameter(best_rots)
     model.translations = nn.Parameter(best_trans)
     return model
-
-
-""" 
-Removed:
-def find_optimal_poses(image_size,
-                       faces=None,
-                       vertices=None,
-                       annotations=None,
-                       images=None,
-                       Ks=None,
-                       num_iterations=50,
-                       num_initializations=2000,
-                       viz_path="tmp.png",
-                       debug=False):
-"""
