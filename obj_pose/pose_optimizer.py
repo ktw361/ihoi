@@ -80,20 +80,16 @@ class PoseRenderer(nn.Module):
 
         vertices = torch.as_tensor(vertices, device=device)
         faces = torch.as_tensor(faces, device=device)
-        self.register_buffer("vertices",
-                             vertices.repeat(num_initializations, 1, 1))
+        self.register_buffer("vertices", vertices)
         self.register_buffer("faces", faces.repeat(num_initializations, 1, 1))
-        self.register_buffer(
-            "textures", textures.repeat(num_initializations, 1, 1, 1, 1, 1))
+        self.register_buffer("textures", textures)
 
         # Load reference mask.
         # Convention for silhouette-aware loss: -1=occlusion, 0=bg, 1=fg.
         image_ref = torch.from_numpy((ref_image > 0).astype(np.float32))
         keep_mask = torch.from_numpy((ref_image >= 0).astype(np.float32))
-        self.register_buffer("image_ref",
-                             image_ref.repeat(num_initializations, 1, 1))
-        self.register_buffer("keep_mask",
-                             keep_mask.repeat(num_initializations, 1, 1))
+        self.register_buffer("image_ref", image_ref)
+        self.register_buffer("keep_mask", keep_mask)
         self.pool = torch.nn.MaxPool2d(kernel_size=kernel_size,
                                        stride=1,
                                        padding=(kernel_size // 2))
@@ -107,8 +103,7 @@ class PoseRenderer(nn.Module):
         mask_edge = self.compute_edges(image_ref.unsqueeze(0)).cpu().numpy()
         edt = distance_transform_edt(1 - (mask_edge > 0))**(power * 2)
         self.register_buffer(
-            "edt_ref_edge",
-            torch.from_numpy(edt).repeat(num_initializations, 1, 1).float())
+            "edt_ref_edge", torch.from_numpy(edt))
         # Setup renderer.
         if K is None:
             K = torch.FloatTensor([[[1, 0, 0.5], [0, 1, 0.5], [0, 0, 1]]]).to(device)
@@ -432,27 +427,15 @@ class PoseOptimization:
         """
 
         """ Get `obj_bbox` and `obj_bbox_sqaured` both in XYWH"""
-        # x, y, w, h = obj_bbox
-        # obj_bbox_xyxy = np.asarray([x, y, x + w, y + h], dtype=np.float32)
         obj_bbox_xyxy = xywh_to_xyxy(obj_bbox)
         obj_bbox_squared_xyxy = image_utils.square_bbox(obj_bbox_xyxy, obj_bbox_expand)
-        # _x1, _y1, _x2, _y2 = obj_bbox_squared_xyxy
-        # obj_bbox_squared = np.asarray([_x1, _y1, _x2 - _x1, _y2 - _y1], dtype=np.float32)
         obj_bbox_squared = xyxy_to_xywh(obj_bbox_squared_xyxy)
-        # _x1, _y1, _w, _h = obj_bbox_squared
 
         """ Get `image` and `mask` """
-        # obj_patch = image_utils.crop_resize(
-        #     image, obj_bbox_squared_xyxy, final_size=rend_size)
         image_patch = self.pad_and_crop( 
             image, obj_bbox_squared, rend_size)
         obj_mask_patch = self.pad_and_crop(
             object_mask, obj_bbox_squared, rend_size)
-        # obj_mask_patch = F.resized_crop(
-        #     torch.as_tensor(object_mask)[None],
-        #     int(_y1), int(_x1), int(_h), int(_w), size=[rend_size, rend_size],
-        #     interpolation=transforms.InterpolationMode.NEAREST
-        # )[0].numpy()
 
         return obj_bbox_squared, image_patch, obj_mask_patch
 
