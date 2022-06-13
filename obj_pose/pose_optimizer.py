@@ -18,7 +18,7 @@ import neural_renderer as nr
 from scipy.ndimage.morphology import distance_transform_edt
 
 import torchvision.transforms.functional as F
-import torchvision
+from torchvision import transforms
 from pytorch3d.transforms import Transform3d
 
 from nnutils import image_utils, geom_utils
@@ -27,6 +27,7 @@ from nnutils.hand_utils import ManopthWrapper
 from libzhifan.geometry import (
     SimpleMesh, CameraManager, projection
 )
+from libzhifan.odlib import xyxy_to_xywh, xywh_to_xyxy
 
 from libyana.camutils import project
 from libyana.conversions import npt
@@ -188,12 +189,26 @@ class PoseOptimization:
 
     OBJ_SCALES = dict(
         plate=0.3,
+        cup=0.12,
+        can=0.2,
+        mug=0.12,
+        bowl=0.12,
+        bottle=0.2
     )
 
     WEAK_CAM_FX = 10
 
     FULL_HEIGHT = 720
     FULL_WIDTH = 1280
+
+    """ 
+    Bounding boxes mentioned in the pipeline:
+
+    `hand_bbox`, `obj_bbox`: original boxes labels in epichoa 
+    `hand_bbox_proc`: processed hand_bbox during mocap regressing
+    `obj_bbox_squared`: squared obj_bbox before diff rendering
+
+    """
 
     def __init__(self, 
                  obj_models_root='./weights/obj_models'):
@@ -326,7 +341,8 @@ class PoseOptimization:
                             fit_model, 
                             idx: int,
                             kind: str,
-                            image
+                            image,
+                            obj_bbox=None,
                             ):
         """ 
         Args:
@@ -335,8 +351,8 @@ class PoseOptimization:
                 - 'global': render w.r.t full image
                 - 'ihoi': render w.r.t image prepared 
                     according to process_mocap_predictions()
+            image: original full image
         """
-        # TODO
         hand_mesh, hand_camera, hand_bbox_proc, global_cam = \
             self.calc_hand_mesh(mocap_predictions, return_mesh=True)
         obj_mesh = SimpleMesh(fit_model.apply_transformation()[idx], fit_model.faces[idx])
@@ -353,10 +369,93 @@ class PoseOptimization:
             )
             return img
         elif kind == 'ihoi':
-            pass
+            obj_bbox_squared, image_patch, _ = \
+                self._get_bbox_and_crop(image, image, obj_bbox,
+                                        obj_bbox_expand=0.5, rend_size=REND_SIZE)
+            hand_cam_expand = global_cam.crop_and_resize(
+                obj_bbox_squared, REND_SIZE)
+            img = projection.perspective_projection_by_camera(
+                [obj_mesh, hand_mesh],
+                hand_cam_expand,
+                method=dict(
+                    name='pytorch3d',
+                    coor_sys='nr',
+                    in_ndc=False
+                ),
+                image=np.uint8(image_patch*256),
+            )
+            return img
         else:
             raise ValueError(f"kind {kind} not unserstood")
+
+    @staticmethod
+    def pad_and_crop(image, box, out_size: int):
+        """ Pad 0's if box exceeds boundary.
+
+        Args:
+            image: (H, W) or (H, W, 3)
+            box: (4,) xywh
+            out_size: int
+        Returns:
+            img_crop: (crop_h, crop_w, ...) according to input
+        """
+        x, y, w, h = box
+        pad_x, pad_y = map(
+            lambda t: int(np.ceil(max(-t, 0))), (x, y))
+        transform = transforms.Compose(
+            [transforms.ToTensor(),
+            transforms.Pad([pad_x, pad_y])
+            ])
+        x += pad_x
+        y += pad_y
+
+        image_pad = transform(image)
+        crop_tensor = F.resized_crop(
+            torch.as_tensor(image_pad)[None],
+            int(y), int(x), int(h), int(w), size=[out_size, out_size],
+            interpolation=transforms.InterpolationMode.NEAREST
+        )
+        return crop_tensor.permute(0, 2, 3, 1).squeeze().numpy()
     
+    def _get_bbox_and_crop(self, 
+                           image, 
+                           object_mask, 
+                           obj_bbox, 
+                           rend_size=REND_SIZE,
+                           obj_bbox_expand=0.5):
+        """ 
+        Returns:
+            obj_box_squared
+            image_patch: (H, W, 3) in [0, 1]
+            object_mask_patch: (H, W) in [0, 1]
+
+        """
+
+        """ Get `obj_bbox` and `obj_bbox_sqaured` both in XYWH"""
+        # x, y, w, h = obj_bbox
+        # obj_bbox_xyxy = np.asarray([x, y, x + w, y + h], dtype=np.float32)
+        obj_bbox_xyxy = xywh_to_xyxy(obj_bbox)
+        obj_bbox_squared_xyxy = image_utils.square_bbox(obj_bbox_xyxy, obj_bbox_expand)
+        # _x1, _y1, _x2, _y2 = obj_bbox_squared_xyxy
+        # obj_bbox_squared = np.asarray([_x1, _y1, _x2 - _x1, _y2 - _y1], dtype=np.float32)
+        obj_bbox_squared = xyxy_to_xywh(obj_bbox_squared_xyxy)
+        # _x1, _y1, _w, _h = obj_bbox_squared
+
+        """ Get `image` and `mask` """
+        # obj_patch = image_utils.crop_resize(
+        #     image, obj_bbox_squared_xyxy, final_size=rend_size)
+        image_patch = self.pad_and_crop( 
+            image, obj_bbox_squared, rend_size)
+        obj_mask_patch = self.pad_and_crop(
+            object_mask, obj_bbox_squared, rend_size)
+        # obj_mask_patch = F.resized_crop(
+        #     torch.as_tensor(object_mask)[None],
+        #     int(_y1), int(_x1), int(_h), int(_w), size=[rend_size, rend_size],
+        #     interpolation=transforms.InterpolationMode.NEAREST
+        # )[0].numpy()
+
+        return obj_bbox_squared, image_patch, obj_mask_patch
+
     def optimize_obj_pose(self,
                           image,
                           obj_bbox,
@@ -365,6 +464,12 @@ class PoseOptimization:
                           hand_bbox_processed,
                           global_cam=None,
                           return_kwargs=False,
+
+                          num_initializations=400,
+                          num_iterations=50,
+                          debug=True,
+                          sort_best=False,
+                          viz=True,
                           ):
         """ 
         Args: See EpicInference dataset output.
@@ -379,23 +484,10 @@ class PoseOptimization:
             PoseRenderer
         """
         rend_size = REND_SIZE
-        obj_bbox_expand = 0.5
 
-        """ Get `obj_bbox` and `obj_bbox_sqaured` both in XYWH"""
-        x, y, w, h = obj_bbox
-        obj_bbox_xyxy = np.asarray([x, y, x + w, y + h], dtype=np.float32)
-        obj_bbox_squared_xyxy = image_utils.square_bbox(obj_bbox_xyxy, obj_bbox_expand)
-        _x1, _y1, _x2, _y2 = obj_bbox_squared_xyxy
-        obj_bbox_squared = np.asarray([_x1, _y1, _x2 - _x1, _y2 - _y1], dtype=np.float32)
-
-        """ Get `image` and `mask` """
-        obj_patch = image_utils.crop_resize(
-            image, obj_bbox_squared_xyxy, final_size=rend_size)
-        obj_mask_patch = F.resized_crop(
-            torch.as_tensor(object_mask)[None],
-            int(_y1), int(_x1), int(_y2 - _y1), int(_x2 - _x1), size=[rend_size, rend_size],
-            interpolation=torchvision.transforms.InterpolationMode.NEAREST
-        )[0].numpy()
+        obj_bbox_squared, image_patch, obj_mask_patch = \
+            self._get_bbox_and_crop(image, object_mask, obj_bbox,
+                                    obj_bbox_expand=0.5, rend_size=rend_size)
 
         """ Get global_camera. """
         if global_cam is None:
@@ -415,16 +507,16 @@ class PoseOptimization:
                 faces=faces,
                 bbox=obj_bbox,
                 square_bbox=obj_bbox_squared,
-                image=obj_patch,
+                image=image_patch,
                 mask=obj_mask_patch,
                 K=global_cam.get_K(),
                 image_size=(rend_size, rend_size),
 
-                num_initializations=20,
-                num_iterations=20,
-                debug=True,
-                sort_best=False,
-                viz=True,
+                num_initializations=num_initializations,
+                num_iterations=num_iterations,
+                debug=debug,
+                sort_best=sort_best,
+                viz=viz,
 
                 global_cam=global_cam,
             )
@@ -435,16 +527,16 @@ class PoseOptimization:
                 faces=faces,
                 bbox=obj_bbox,
                 square_bbox=obj_bbox_squared,
-                image=obj_patch,
+                image=image_patch,
                 mask=obj_mask_patch,
                 K=global_cam.get_K(),
                 image_size=(rend_size, rend_size),
 
-                num_initializations=20,
-                num_iterations=20,
-                debug=True,
-                sort_best=False,
-                viz=True,
+                num_initializations=num_initializations,
+                num_iterations=num_iterations,
+                debug=debug,
+                sort_best=sort_best,
+                viz=viz,
             )
             return model
 
@@ -502,6 +594,7 @@ def find_optimal_pose(
     camintr_roi = kcrop.get_K_crop_resize(
         torch.Tensor(K).unsqueeze(0), torch.tensor([[x, y, x + b, y + b]]),
         [REND_SIZE]).to(device)
+    # Equivalently: K.crop(square_box).resize(REND_SIZE)
 
     # Stuff to keep around
     best_losses = torch.tensor(np.inf)
