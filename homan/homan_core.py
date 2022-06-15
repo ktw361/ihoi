@@ -7,7 +7,8 @@ import torch
 from torch import nn
 from tqdm import tqdm
 
-from homan.losses import Losses, compute_ordinal_depth_loss
+from homan import lossutils
+from homan.losses import Losses
 from homan.homan_ManoModel import HomanManoModel
 from homan.meshutils import get_faces_and_textures
 from homan.utils.camera import (
@@ -22,40 +23,40 @@ from libyana.verify.checkshape import check_shape
 
 
 class HOMan(nn.Module):
-    def __init__(
-        self,
-        translations_object,
-        rotations_object,
-        verts_object_og,
-        faces_object,
-        translations_hand,
-        rotations_hand,
-        verts_hand_og,
-        ref_verts2d_hand,
-        hand_sides,
-        mano_trans,
-        mano_rot,
-        mano_betas,
-        mano_pca_pose,
-        faces_hand,
-        masks_object,
-        masks_hand,
-        camintr_rois_object,
-        camintr_rois_hand,
-        target_masks_object,
-        target_masks_hand,
-        class_name,
-        cams_hand=None,
-        int_scale_init=1.0,
-        camintr=None,
-        optimize_object_scale=False,
-        optimize_ortho_cam=True,
-        hand_proj_mode="persp",
-        optimize_mano=True,
-        optimize_mano_beta=True,
-        inter_type="centroid",
-        image_size=640,
-    ):
+    def __init__(self,
+                 translations_object,  # (1, 1, 3)
+                 rotations_object,
+                 verts_object_og,
+                 faces_object,
+
+                 translations_hand,  # (1, 1, 3)
+                 rotations_hand,
+                 verts_hand_og,
+                 ref_verts2d_hand,
+                 hand_sides,
+                 mano_trans,
+                 mano_rot,
+                 mano_betas,
+                 mano_pca_pose,
+                 faces_hand,
+
+                 masks_object,
+                 masks_hand,
+                 camintr_rois_object,
+                 camintr_rois_hand,
+                 target_masks_object,
+                 target_masks_hand,
+                 class_name,
+                 cams_hand=None,
+                 int_scale_init=1.0,
+                 camintr=None,
+                 optimize_object_scale=False,
+                 optimize_ortho_cam=True,
+                 hand_proj_mode="persp",
+                 optimize_mano=True,
+                 optimize_mano_beta=True,
+                 inter_type="centroid",
+                 image_size=640):
         """
         Hands are received in batch of [h_1_t_1, h_2_t_1, ..., h_1_t_2]
         (h_{hand_index}_t_{time_step})
