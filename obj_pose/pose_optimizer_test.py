@@ -41,7 +41,7 @@ def main():
         bbox=bbox,
         square_bbox=square_bbox,
         image_size=image_size,
-        K=K,
+        K_global=K,
         num_initializations=num_initalizations,
         image=image,
 
