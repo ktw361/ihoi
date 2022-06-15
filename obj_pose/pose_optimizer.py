@@ -35,11 +35,11 @@ from libyana.lib3d import kcrop
 from libyana.metrics import iou as ioumetrics
 from libyana.visutils import imagify
 
-from .lib3d.optitrans import (
+from homan.lib3d.optitrans import (
     TCO_init_from_boxes_zup_autodepth,
     compute_optimal_translation,
 )
-from .utils.geometry import (
+from homan.utils.geometry import (
     compute_random_rotations,
     rot6d_to_matrix,
     matrix_to_rot6d,
