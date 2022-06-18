@@ -36,7 +36,6 @@ class EpicInference(Dataset):
                  epic_root='/home/skynet/Zhifan/datasets/epic',
                  mask_dir='/home/skynet/Zhifan/data/epic_analysis/interpolation',
                  image_size=(1280, 720), # (640, 360),
-                 merge_hand_mask=True,
                  *args,
                  **kwargs):
         """_summary_
@@ -54,7 +53,6 @@ class EpicInference(Dataset):
         self.mask_dir = mask_dir
         self.hoa_root = osp.join(epic_root, 'hoa')
         self.image_size = image_size
-        self.merge_hand_mask = merge_hand_mask
 
         self.box_scale = np.asarray(image_size * 2) / ((1920, 1080) * 2)
         self.data_infos = self._read_image_sets(image_sets)
@@ -137,12 +135,11 @@ class EpicInference(Dataset):
         mask = Image.open(path).convert('P')
         mask = mask.resize(self.image_size, Image.NEAREST)
         mask = np.asarray(mask, dtype=np.float32)
-        mask_merged = np.zeros_like(mask)
-        if self.merge_hand_mask:
-            mask_merged[mask == epic_cats.index(side + ' hand')] = 1
-        else:
-            mask_merged[mask == epic_cats.index(side + ' hand')] = -1
-        mask_merged[mask == epic_cats.index(cat)] = 1
+        mask_hand = np.zeros_like(mask)
+        mask_obj = np.zeros_like(mask)
+        side_name = f"{side} hand"
+        mask_hand[mask == epic_cats.index(side_name)] = 1
+        mask_obj[mask == epic_cats.index(cat)] = 1
 
         hand_entries = self._get_hand_entries(vid, frame_idx)
         hand_entry = hand_entries[hand_entries.side == side].iloc[0]
@@ -154,7 +151,7 @@ class EpicInference(Dataset):
         obj_entry = obj_entries.iloc[0]
         obj_bbox_arr = (row2xywh(obj_entry) * self.box_scale).astype(np.float32)
 
-        return image, hand_bbox_dict, obj_bbox_arr, mask_merged, cat
+        return image, hand_bbox_dict, obj_bbox_arr, mask_hand, mask_obj, cat
     
 
 if __name__ == '__main__':

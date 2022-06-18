@@ -60,7 +60,7 @@ class Losses():
         camintr_rois_object,
         camintr_rois_hand,
         camintr,
-        class_name,
+        class_name='default',
         inter_type="min",
         hand_nb=1,
     ):
