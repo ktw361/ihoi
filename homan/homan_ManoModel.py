@@ -8,7 +8,7 @@ class HomanManoModel(nn.Module):
     
     def __init__(self, mano_root, pca_comps=16, batch_size=1):
         super().__init__()
-        assert pca_comps == 16
+        # assert pca_comps == 16
         self.mano_layer = ManoLayer(
             flat_hand_mean=False, 
             ncomps=pca_comps, 
@@ -17,7 +17,7 @@ class HomanManoModel(nn.Module):
             use_pca=True)
 
     def forward_pca(self,
-                    pca_pose=None,
+                    pca_pose,
                     rot=None,
                     betas=None,
                     side='right'):
@@ -34,6 +34,8 @@ class HomanManoModel(nn.Module):
         """
         flat_hand_mean = False
 
+        if rot is None:
+            rot = torch.zeros([1, 3], dtype=pca_pose.dtype, device=pca_pose.device)
 
         if side == 'right':
             pass

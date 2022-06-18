@@ -46,7 +46,7 @@ class HOMan(nn.Module):
                  camintr_rois_hand,
                  target_masks_object,
                  target_masks_hand,
-                 class_name,
+                 class_name='default',
                  cams_hand=None,
                  int_scale_init=1.0,
                  camintr=None,
@@ -56,17 +56,24 @@ class HOMan(nn.Module):
                  optimize_mano=True,
                  optimize_mano_beta=True,
                  inter_type="centroid",
-                 image_size=640):
+                 image_size:int = 640):
         """
         Hands are received in batch of [h_1_t_1, h_2_t_1, ..., h_1_t_2]
         (h_{hand_index}_t_{time_step})
+
+        Args:
+            verts_hand_og: Transformed hands TODO(check)
+            target_masks_object: used as ref_mask_obj
+            target_masks_hand: used as _ref_mask_hand
+            camintr_rois_object: from model.K.detach(),
+                and to be used in self.renderer
         """
         super().__init__()
         # Initialize object pamaters
         translation_init = translations_object.detach().clone()
         self.translations_object = nn.Parameter(translation_init,
                                                 requires_grad=True)
-        self.mano_model = HomanManoModel("extra_data/mano", pca_comps=16)
+        self.mano_model = HomanManoModel("externals/mano", pca_comps=45)  # TODO(zhifan): was 16
         self.hand_proj_mode = hand_proj_mode
 
         rotations_object = rotations_object.detach().clone()
@@ -118,7 +125,7 @@ class HOMan(nn.Module):
         self.register_buffer("ref_verts2d_hand", ref_verts2d_hand)
 
         init_scales = int_scale_init * torch.ones(1).float()
-        init_scales_mean = torch.Tensor(int_scale_init).float()
+        # init_scales_mean = torch.Tensor(int_scale_init).float()
         self.optimize_object_scale = optimize_object_scale
         if optimize_object_scale:
             self.int_scales_object = nn.Parameter(
@@ -175,7 +182,7 @@ class HOMan(nn.Module):
         self.renderer.background_color = [1.0, 1.0, 1.0]
         if masks_hand is not None:
             self.register_buffer("masks_human", masks_hand)
-        if masks_object.dim() == 2:
+        if masks_object is not None and masks_object.dim() == 2:
             masks_object = masks_object.unsqueeze(0)
         self.register_buffer("masks_object", masks_object)
         verts_object, _ = self.get_verts_object()

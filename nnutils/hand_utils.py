@@ -80,7 +80,7 @@ class ManopthWrapper(nn.Module):
         :param pose: (N, 45)
         :return: articulated pose: (N, pca)
         """
-        pose = pose - self.hand_mean
+        pose = pose - self.hand_mean  # Note(zhifan): this code might be wrong
         components = self.th_selected_comps[:ncomps]  # (D, 45)
         scale = self.inv_scale[:ncomps]
 
