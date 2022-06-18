@@ -63,38 +63,43 @@ class PoseOptimizer:
                  one_hand,
                  obj_loader,
                  hand_wrapper,
+                 rend_size=REND_SIZE,
                  ):
         """ 
         Args:
             hand_wrapper: Non flat ManoWrapper
                 e.g. 
-                    hand_wrapper = ManopthWrapper(flat_hand_mean=False).to('cpu')
+                    hand_wrapper = ManopthWrapper(
+                        flat_hand_mean=False,
+                        use_pca=False,
+                        ).to('cpu')
 
         """
         self.one_hand = one_hand
         self.obj_loader = obj_loader
         self.hand_wrapper = hand_wrapper
+        self.rend_size = rend_size
 
         # Process one_hand
-        pred_hand_pose, pred_hand_betas, pred_camera = map(
+        _pred_hand_pose, _pred_hand_betas, pred_camera = map(
             lambda x: torch.as_tensor(one_hand[x]),
             ('pred_hand_pose', 'pred_hand_betas', 'pred_camera'))
         _hand_bbox_proc = one_hand['bbox_processed']
-        rot_axisang, pred_hand_pose = pred_hand_pose[:, :3], pred_hand_pose[:, 3:]
+        rot_axisang, _pred_hand_pose = _pred_hand_pose[:, :3], _pred_hand_pose[:, 3:]
 
         self._hand_rotation, self._hand_translation = self._compute_hand_transform(
-            rot_axisang, pred_hand_pose, pred_camera)
-        hand_verts, hand_cam, global_cam = self._calc_hand_mesh(
-            pred_hand_pose, pred_hand_betas, 
+            rot_axisang, _pred_hand_pose, pred_camera)
+        _hand_verts_orig, _hand_verts, hand_cam, global_cam = self._calc_hand_mesh(
+            _pred_hand_pose, _pred_hand_betas, 
             _hand_bbox_proc
         )
 
-        self.pred_hand_pose = pred_hand_pose  # (1, 45)
-        self.pred_hand_betas = pred_hand_betas
-        self.hand_verts = hand_verts
-        self.hand_faces = self.hand_wrapper.hand_faces
+        self._pred_hand_pose = _pred_hand_pose  # (1, 45)
+        self._pred_hand_betas = _pred_hand_betas
+        self._hand_verts = _hand_verts
+        self._hand_verts_orig = _hand_verts_orig
 
-        self.hand_cam = hand_cam
+        self._hand_cam = hand_cam
         self._hand_bbox_proc = _hand_bbox_proc
         self.global_cam = global_cam
 
@@ -102,6 +107,31 @@ class PoseOptimizer:
         self._fit_model = None
         self._obj_bbox = None
         self._full_image = None
+    
+    @property
+    def pred_hand_pose(self):
+        return self._pred_hand_pose
+
+    @property
+    def pred_hand_betas(self):
+        return self._pred_hand_betas
+
+    @property
+    def hand_faces(self):
+        return self.hand_wrapper.hand_faces
+
+    @property
+    def hand_verts(self):
+        return self._hand_verts
+    
+    @property
+    def hand_verts_orig(self):
+        """ hand_verts before applying [self.hand_rotation | self.hand_translation] """
+        return self._hand_verts_orig
+    
+    @property
+    def hand_cam(self):
+        return self._hand_cam
 
     @property
     def pose_model(self):
@@ -121,6 +151,25 @@ class PoseOptimizer:
     @property
     def hand_translation(self):
         return self._hand_translation
+
+    def recover_pca_pose(self):
+        """ 
+        if 
+            v_exp = ManopthWrapper(pca=False, flat=False).(x_0)
+            x_pca = self.recover_pca_pose(self.x_0)  # R^45
+        then
+            v_act = ManoLayer(pca=True, flat=False, ncomps=45).forward(x_pca)
+            v_exp == v_act
+        
+        note above requires mano_rot == zeros, since the computation of rotation 
+            is different in ManopthWrapper
+        
+        
+        """
+        M_pca_inv = torch.inverse(
+            self.hand_wrapper.mano_layer_right.th_comps)
+        mano_pca_pose = self.pred_hand_pose.mm(M_pca_inv)
+        return mano_pca_pose
 
     def _compute_hand_transform(self, rot_axisang, pred_hand_pose, pred_camera):
         """ 
@@ -177,30 +226,20 @@ class PoseOptimizer:
                 same as one_hand['bbox_processed']
             global_camera: CameraManager
         """
-        # glb_rot = geom_utils.matrix_to_se3(
-        #     geom_utils.axis_angle_t_to_matrix(rot_axisang)) # (1,3)->(1,4,4)-> (1,12)
-        v, _, _, _ = self.hand_wrapper(None, pred_hand_pose, mode='inner', return_mesh=False)
-        # _, joints = self.hand_wrapper(
-        #     glb_rot,
-        #     pred_hand_pose, return_mesh=True)
-        # fx = self.WEAK_CAM_FX
-        # s, tx, ty = pred_camera
-        # translate = torch.FloatTensor([[tx, ty, fx/s]])
-        # cTh = geom_utils.axis_angle_t_to_matrix(
-        #     rot_axisang, translate - joints[:, 5])
-        # cTh = Transform3d(matrix=cTh.transpose(1, 2))
+        v_orig, _, _, _ = self.hand_wrapper(
+            None, pred_hand_pose, mode='inner', return_mesh=False)
 
         cTh = geom_utils.rt_to_homo(
             self.hand_rotation.transpose(1, 2), t=self.hand_translation)
         cTh = Transform3d(matrix=cTh.transpose(1, 2))
-        hand_verts = cTh.transform_points(v)
+        v_transformed = cTh.transform_points(v_orig)
 
         hand_h, hand_w = hand_bbox_proc[2:]
         hand_cam = self._hand_cam_from_bbox(hand_bbox_proc)
         global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
             hand_bbox_proc, self.FULL_HEIGHT, self.FULL_WIDTH
         )
-        return hand_verts, hand_cam, global_cam
+        return v_orig, v_transformed, hand_cam, global_cam
     
     def _hand_cam_from_bbox(self, hand_bbox):
         """ 
@@ -244,21 +283,15 @@ class PoseOptimizer:
             )
             return img
         elif kind == 'ihoi':
-            obj_bbox_squared, image_patch, _ = \
-                self._get_bbox_and_crop(
-                    self._full_image, self._full_image, self._obj_bbox,
-                    obj_bbox_expand=0.5, rend_size=REND_SIZE)
-            hand_cam_expand = global_cam.crop_and_resize(
-                obj_bbox_squared, REND_SIZE)
             img = projection.perspective_projection_by_camera(
                 [obj_mesh, hand_mesh],
-                hand_cam_expand,
+                self.ihoi_cam,
                 method=dict(
                     name='pytorch3d',
                     coor_sys='nr',
                     in_ndc=False
                 ),
-                image=np.uint8(image_patch*256),
+                image=np.uint8(self._image_patch*256),
             )
             return img
         else:
@@ -297,7 +330,6 @@ class PoseOptimizer:
                            image, 
                            object_mask, 
                            obj_bbox, 
-                           rend_size=REND_SIZE,
                            obj_bbox_expand=0.5):
         """ 
         Returns:
@@ -314,9 +346,9 @@ class PoseOptimizer:
 
         """ Get `image` and `mask` """
         image_patch = self.pad_and_crop( 
-            image, obj_bbox_squared, rend_size)
+            image, obj_bbox_squared, self.rend_size)
         obj_mask_patch = self.pad_and_crop(
-            object_mask, obj_bbox_squared, rend_size)
+            object_mask, obj_bbox_squared, self.rend_size)
 
         return obj_bbox_squared, image_patch, obj_mask_patch
 
@@ -345,14 +377,13 @@ class PoseOptimizer:
         Returns:
             PoseRenderer
         """
-        rend_size = REND_SIZE
-
         """ saved for self.render_model_output() """
         self._obj_bbox = obj_bbox  
         self._full_image = image
         obj_bbox_squared, image_patch, obj_mask_patch = \
             self._get_bbox_and_crop(image, object_mask, obj_bbox,
-                                    obj_bbox_expand=0.5, rend_size=rend_size)
+                                    obj_bbox_expand=0.5)
+        self._image_patch = image_patch
 
         """ Get global_camera. """
         if global_cam is None:
@@ -361,6 +392,8 @@ class PoseOptimizer:
             global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
                 self._hand_bbox_proc, self.FULL_HEIGHT, self.FULL_WIDTH
             )
+        self.ihoi_cam = global_cam.crop_and_resize(
+            obj_bbox_squared, self.rend_size)
 
         obj_mesh = self.obj_loader.load_obj_by_name(cat, return_mesh=False)
         vertices = torch.as_tensor(obj_mesh.vertices, device='cuda')
@@ -374,7 +407,7 @@ class PoseOptimizer:
             image=image_patch,
             mask=obj_mask_patch,
             K_global=global_cam.get_K(),
-            image_size=(rend_size, rend_size),
+            image_size=(self.rend_size, self.rend_size),
 
             num_initializations=num_initializations,
             num_iterations=num_iterations,
