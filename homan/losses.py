@@ -53,7 +53,6 @@ class Losses():
         self,
         renderer,
         ref_mask_object,
-        ref_verts2d_hand,
         keep_mask_object,
         ref_mask_hand,
         keep_mask_hand,
@@ -79,7 +78,6 @@ class Losses():
         self.keep_mask_object = keep_mask_object
         self.camintr_rois_object = camintr_rois_object
         self.ref_mask_hand = ref_mask_hand
-        self.ref_verts2d_hand = ref_verts2d_hand
         self.keep_mask_hand = keep_mask_hand
         self.camintr_rois_hand = camintr_rois_hand
         # Necessary ! Otherwise camintr gets updated for some reason TODO check
@@ -137,30 +135,30 @@ class Losses():
                     interacting.append(0)
             return interacting
 
-    def compute_verts2d_loss_hand(self,
-                                  verts,
-                                  image_size=640,
-                                  min_hand_size=70):
-        camintr = self.camintr.unsqueeze(1).repeat(1, self.hand_nb, 1,
-                                                   1).view(-1, 3, 3)
-        pred_verts_proj = project.batch_proj2d(verts, camintr)
-        tar_verts = self.ref_verts2d_hand / image_size
-        verts2d_loss = ((pred_verts_proj - tar_verts)**2).sum(-1).mean()
-        too_small_hands = (self.ref_verts2d_hand -
-                           self.ref_verts2d_hand.mean(1).unsqueeze(1)).norm(
-                               2, -1).max(1)[0] < min_hand_size
-        verts2d_loss_new = (
-            ((pred_verts_proj - tar_verts)**2) *
-            (1 - too_small_hands.float()).unsqueeze(1).unsqueeze(1)
-        ).sum(-1).mean()
-        verts2d_dist = (pred_verts_proj * image_size -
-                        self.ref_verts2d_hand).norm(2, -1).mean()
-        # HACK TODO beautify, discard hands that are too small !
-        return {
-            "loss_v2d_hand": verts2d_loss
-        }, {
-            "v2d_hand": verts2d_dist.item()
-        }
+    # def compute_verts2d_loss_hand(self,
+    #                               verts,
+    #                               image_size=640,
+    #                               min_hand_size=70):
+    #     camintr = self.camintr.unsqueeze(1).repeat(1, self.hand_nb, 1,
+    #                                                1).view(-1, 3, 3)
+    #     pred_verts_proj = project.batch_proj2d(verts, camintr)
+    #     tar_verts = self.ref_verts2d_hand / image_size
+    #     verts2d_loss = ((pred_verts_proj - tar_verts)**2).sum(-1).mean()
+    #     too_small_hands = (self.ref_verts2d_hand -
+    #                        self.ref_verts2d_hand.mean(1).unsqueeze(1)).norm(
+    #                            2, -1).max(1)[0] < min_hand_size
+    #     verts2d_loss_new = (
+    #         ((pred_verts_proj - tar_verts)**2) *
+    #         (1 - too_small_hands.float()).unsqueeze(1).unsqueeze(1)
+    #     ).sum(-1).mean()
+    #     verts2d_dist = (pred_verts_proj * image_size -
+    #                     self.ref_verts2d_hand).norm(2, -1).mean()
+    #     # HACK TODO beautify, discard hands that are too small !
+    #     return {
+    #         "loss_v2d_hand": verts2d_loss
+    #     }, {
+    #         "v2d_hand": verts2d_dist.item()
+    #     }
 
     def compute_sil_loss_hand(self, verts, faces):
         loss_sil = torch.Tensor([0.0]).float().cuda()
