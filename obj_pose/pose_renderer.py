@@ -138,11 +138,12 @@ class PoseRenderer(nn.Module):
         loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(verts)
         return loss_dict, iou, image
 
-    def render(self):
+    def render(self) -> np.ndarray:
         """
         Renders objects according to current rotation and translation.
         """
         verts = self.apply_transformation()
-        images = self.renderer(verts, self.faces, torch.tanh(self.textures))[0]
-        images = images.detach().cpu().numpy().transpose(0, 2, 3, 1)
+        # images = self.renderer(verts, self.faces, torch.tanh(self.textures))[0]
+        images = self.renderer(verts, self.faces, mode='silhouettes')
+        images = images.detach().cpu().numpy()
         return images

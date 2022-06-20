@@ -64,6 +64,7 @@ class PoseOptimizer:
                  obj_loader,
                  hand_wrapper,
                  rend_size=REND_SIZE,
+                 device='cuda',
                  ):
         """ 
         Args:
@@ -72,17 +73,18 @@ class PoseOptimizer:
                     hand_wrapper = ManopthWrapper(
                         flat_hand_mean=False,
                         use_pca=False,
-                        ).to('cpu')
+                        )
 
         """
         self.one_hand = one_hand
         self.obj_loader = obj_loader
         self.hand_wrapper = hand_wrapper
         self.rend_size = rend_size
+        self.device = device
 
         # Process one_hand
         _pred_hand_pose, _pred_hand_betas, pred_camera = map(
-            lambda x: torch.as_tensor(one_hand[x]),
+            lambda x: torch.as_tensor(one_hand[x], device=device),
             ('pred_hand_pose', 'pred_hand_betas', 'pred_camera'))
         _hand_bbox_proc = one_hand['bbox_processed']
         rot_axisang, _pred_hand_pose = _pred_hand_pose[:, :3], _pred_hand_pose[:, 3:]
@@ -190,7 +192,8 @@ class PoseOptimizer:
             pred_hand_pose, return_mesh=True)
         fx = self.WEAK_CAM_FX
         s, tx, ty = pred_camera
-        translate = torch.FloatTensor([[tx, ty, fx/s]])
+        translate = torch.as_tensor(
+            [[tx, ty, fx/s]], dtype=torch.float32, device=self.device)
         translation = translate - joints[:, 5]
         rotation_row = rotation.transpose(1, 2)
         return rotation_row, translation

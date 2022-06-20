@@ -17,6 +17,8 @@ from homan.utils.camera import (
 )
 from homan.utils.geometry import combine_verts, matrix_to_rot6d, rot6d_to_matrix
 
+from libzhifan.geometry import SimpleMesh, visualize_mesh
+
 from libyana.conversions import npt
 from libyana.lib3d import trans3d
 from libyana.verify.checkshape import check_shape
@@ -32,7 +34,6 @@ class HOMan(nn.Module):
                  translations_hand,  # (1, 1, 3)
                  rotations_hand,
                  verts_hand_og,
-                 ref_verts2d_hand,
                  hand_sides,
                  mano_trans,
                  mano_rot,
@@ -48,7 +49,8 @@ class HOMan(nn.Module):
                  target_masks_hand,
                  class_name='default',
                  cams_hand=None,
-                 int_scale_init=1.0,
+                 scale_hand=1.0,
+                 scale_object=1.0,
                  camintr=None,
                  optimize_object_scale=False,
                  optimize_ortho_cam=True,
@@ -113,27 +115,25 @@ class HOMan(nn.Module):
         if optimize_mano_beta:
             self.mano_betas = nn.Parameter(torch.zeros_like(mano_betas),
                                            requires_grad=True)
-            self.register_buffer("int_scales_hand",
-                                 torch.ones(1).float() * int_scale_init)
+            self.register_buffer("scale_hand",
+                                 torch.ones(1).float() * scale_hand)
         else:
             self.register_buffer("mano_betas", torch.zeros_like(mano_betas))
-            self.int_scales_hand = nn.Parameter(
-                int_scale_init * torch.ones(1).float(),
+            self.scale_hand = nn.Parameter(
+                scale_hand * torch.ones(1).float(),
                 requires_grad=True,
             )
         self.register_buffer("verts_hand_og", verts_hand_og)
-        self.register_buffer("ref_verts2d_hand", ref_verts2d_hand)
 
-        init_scales = int_scale_init * torch.ones(1).float()
-        # init_scales_mean = torch.Tensor(int_scale_init).float()
         self.optimize_object_scale = optimize_object_scale
         if optimize_object_scale:
-            self.int_scales_object = nn.Parameter(
-                init_scales,
+            self.scale_object = nn.Parameter(
+                scale_object * torch.ones(1).float(),
                 requires_grad=True,
             )
         else:
-            self.register_buffer("int_scales_object", init_scales)
+            self.register_buffer("scale_object",
+                                 scale_object * torch.ones(1).float())
         self.register_buffer("int_scale_object_mean", torch.ones(1).float())
 
         self.register_buffer("int_scale_hand_mean",
@@ -228,7 +228,6 @@ class HOMan(nn.Module):
             ref_mask_object=self.ref_mask_object,
             keep_mask_object=self.keep_mask_object,
             ref_mask_hand=self.ref_mask_hand,
-            ref_verts2d_hand=self.ref_verts2d_hand,
             keep_mask_hand=self.keep_mask_hand,
             camintr_rois_object=self.camintr_rois_object,
             camintr_rois_hand=self.camintr_rois_hand,
@@ -308,7 +307,7 @@ class HOMan(nn.Module):
             meshes=self.verts_object_og,
             translations=self.translations_object,
             rotations=rotations_object,
-            intrinsic_scales=self.int_scales_object.abs(),
+            intrinsic_scales=self.scale_object.abs(),
         )
         return obj_verts
 
@@ -341,7 +340,7 @@ class HOMan(nn.Module):
             meshes=joints_hand_og,
             translations=self.translations_hand,
             rotations=rotations_hand,
-            intrinsic_scales=self.int_scales_hand,
+            intrinsic_scales=self.scale_hand,
         )
 
     def get_verts_hand(self, detach_scale=False):
@@ -363,9 +362,9 @@ class HOMan(nn.Module):
         else:
             verts_hand_og = self.verts_hand_og
         if detach_scale:
-            scale = self.int_scales_hand.detach()
+            scale = self.scale_hand.detach()
         else:
-            scale = self.int_scales_hand
+            scale = self.scale_hand
         rotations_hand = rot6d_to_matrix(self.rotations_hand)
         if self.hand_proj_mode == "ortho":
             return compute_transformation_ortho(
@@ -439,13 +438,13 @@ class HOMan(nn.Module):
         if loss_weights is None or loss_weights["lw_pca"] > 0:
             loss_pca = lossutils.compute_pca_loss(self.mano_pca_pose)
             loss_dict.update(loss_pca)
-        if loss_weights is None or ((loss_weights["lw_smooth_hand"] > 0) or
-                                    (loss_weights["lw_smooth_obj"] > 0)):
-            loss_smooth = lossutils.compute_smooth_loss(
-                verts_hand=verts_hand,
-                verts_obj=verts_object,
-            )
-            loss_dict.update(loss_smooth)
+        # if loss_weights is None or ((loss_weights["lw_smooth_hand"] > 0) or
+        #                             (loss_weights["lw_smooth_obj"] > 0)):
+        #     loss_smooth = lossutils.compute_smooth_loss(
+        #         verts_hand=verts_hand,
+        #         verts_obj=verts_object,
+        #     )
+        #     loss_dict.update(loss_smooth)
         if loss_weights is None or loss_weights["lw_collision"] > 0:
             # Pushes hand out of object, gradient not flowing through object !
             loss_coll = lossutils.compute_collision_loss(
@@ -462,29 +461,30 @@ class HOMan(nn.Module):
                 faces_object=self.faces_object,
                 faces_hand=self.faces_hand)
             loss_dict.update(loss_contact)
-        if loss_weights is None or loss_weights["lw_v2d_hand"] > 0:
-            if self.optimize_object_scale:
-                loss_verts2d, metric_verts2d = self.losses.compute_verts2d_loss_hand(
-                    verts=verts_hand,
-                    image_size=self.image_size,
-                    min_hand_size=70)
-            else:
-                loss_verts2d, metric_verts2d = self.losses.compute_verts2d_loss_hand(
-                    verts=verts_hand,
-                    image_size=self.image_size,
-                    min_hand_size=1000)
-            loss_dict.update(loss_verts2d)
-            metric_dict.update(metric_verts2d)
+        # if loss_weights is None or loss_weights["lw_v2d_hand"] > 0:
+        #     if self.optimize_object_scale:
+        #         loss_verts2d, metric_verts2d = self.losses.compute_verts2d_loss_hand(
+        #             verts=verts_hand,
+        #             image_size=self.image_size,
+        #             min_hand_size=70)
+        #     else:
+        #         loss_verts2d, metric_verts2d = self.losses.compute_verts2d_loss_hand(
+        #             verts=verts_hand,
+        #             image_size=self.image_size,
+        #             min_hand_size=1000)
+        #     loss_dict.update(loss_verts2d)
+        #     metric_dict.update(metric_verts2d)
         if loss_weights is None or loss_weights["lw_sil_obj"] > 0:
             sil_loss_dict, sil_metric_dict = self.losses.compute_sil_loss_object(
                 verts=verts_object, faces=self.faces_object)
             loss_dict.update(sil_loss_dict)
             metric_dict.update(sil_metric_dict)
 
-            # loss_dict.update(
-            #     self.losses.compute_sil_loss_hand(verts=verts_hand,
-            #                                         faces=[self.faces_hand] *
-            #                                         len(verts_hand)))
+        if loss_weights is None or loss_weights['lw_sil_hand'] > 0:
+            loss_dict.update(
+                self.losses.compute_sil_loss_hand(verts=verts_hand,
+                                                    faces=[self.faces_hand] *
+                                                    len(verts_hand)))
         if loss_weights is None or loss_weights["lw_inter"] > 0:
             # Interaction acts only on hand !
             if not self.optimize_object_scale:
@@ -500,13 +500,13 @@ class HOMan(nn.Module):
         if loss_weights is None or loss_weights["lw_scale_obj"] > 0:
             loss_dict[
                 "loss_scale_obj"] = lossutils.compute_intrinsic_scale_prior(
-                    intrinsic_scales=self.int_scales_object,
+                    intrinsic_scales=self.scale_object,
                     intrinsic_mean=self.int_scale_object_mean,
                 )
         if loss_weights is None or loss_weights["lw_scale_hand"] > 0:
             loss_dict[
                 "loss_scale_hand"] = lossutils.compute_intrinsic_scale_prior(
-                    intrinsic_scales=self.int_scales_hand,
+                    intrinsic_scales=self.scale_hand,
                     intrinsic_mean=self.int_scale_hand_mean,
                 )
         if loss_weights is None or loss_weights["lw_depth"] > 0:
@@ -617,6 +617,16 @@ class HOMan(nn.Module):
                                           K=renderer.K[:viz_len],
                                           max_in_batch=max_in_batch)
         return images, masks
+    
+    def to_scene(self, show_axis=False, viewpoint='nr'):
+        """ Returns a trimesh.Scene """
+        verts_obj = self.get_verts_object()[0]
+        verts_hand = self.get_verts_hand()[0]
+        mhand = SimpleMesh(verts_hand, self.faces_hand)
+        mobj = SimpleMesh(verts_obj, self.faces_object)
+        return visualize_mesh([mhand, mobj],
+                              show_axis=show_axis,
+                              viewpoint=viewpoint)
 
     def save_obj(self, fname):
         with open(fname, "w") as fp:
