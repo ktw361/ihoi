@@ -135,31 +135,6 @@ class Losses():
                     interacting.append(0)
             return interacting
 
-    # def compute_verts2d_loss_hand(self,
-    #                               verts,
-    #                               image_size=640,
-    #                               min_hand_size=70):
-    #     camintr = self.camintr.unsqueeze(1).repeat(1, self.hand_nb, 1,
-    #                                                1).view(-1, 3, 3)
-    #     pred_verts_proj = project.batch_proj2d(verts, camintr)
-    #     tar_verts = self.ref_verts2d_hand / image_size
-    #     verts2d_loss = ((pred_verts_proj - tar_verts)**2).sum(-1).mean()
-    #     too_small_hands = (self.ref_verts2d_hand -
-    #                        self.ref_verts2d_hand.mean(1).unsqueeze(1)).norm(
-    #                            2, -1).max(1)[0] < min_hand_size
-    #     verts2d_loss_new = (
-    #         ((pred_verts_proj - tar_verts)**2) *
-    #         (1 - too_small_hands.float()).unsqueeze(1).unsqueeze(1)
-    #     ).sum(-1).mean()
-    #     verts2d_dist = (pred_verts_proj * image_size -
-    #                     self.ref_verts2d_hand).norm(2, -1).mean()
-    #     # HACK TODO beautify, discard hands that are too small !
-    #     return {
-    #         "loss_v2d_hand": verts2d_loss
-    #     }, {
-    #         "v2d_hand": verts2d_dist.item()
-    #     }
-
     def compute_sil_loss_hand(self, verts, faces):
         loss_sil = torch.Tensor([0.0]).float().cuda()
         for i in range(len(verts)):
@@ -237,16 +212,3 @@ class Losses():
         }, {
             "handobj_maxdist": torch.max(min_dists).item()
         }
-
-    @staticmethod
-    def _compute_iou_1d(mask1, mask2):
-        """
-        mask1: (2).
-        mask2: (2).
-        """
-        o_l = torch.min(mask1[0], mask2[0])
-        o_r = torch.max(mask1[1], mask2[1])
-        i_l = torch.max(mask1[0], mask2[0])
-        i_r = torch.min(mask1[1], mask2[1])
-        inter = torch.clamp(i_r - i_l, min=0)
-        return inter / (o_r - o_l)
