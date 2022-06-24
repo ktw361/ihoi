@@ -10,6 +10,8 @@ from datasets.epic_lib import epichoa
 
 """ Epic-Kitchens Inference Datasetf """
 
+HAND_CROP_EXPAND = 0.2
+
 epic_cats = [
     '_bg',
     'left hand',
@@ -36,6 +38,7 @@ class EpicInference(Dataset):
                  epic_root='/home/skynet/Zhifan/datasets/epic',
                  mask_dir='/home/skynet/Zhifan/data/epic_analysis/interpolation',
                  image_size=(1280, 720), # (640, 360),
+                 crop_hand_mask=False,
                  *args,
                  **kwargs):
         """_summary_
@@ -46,13 +49,15 @@ class EpicInference(Dataset):
             hoa_root (str): 
             mask_dir (str): 
             image_size: Tuple of (W, H)
-            merge_hand_mask (bool): whether to merge hand mask into object mask
+            crop_hand_mask: If True, will crop hand mask with only pixels
+                inside hand_bbox.
         """
         super(EpicInference, self).__init__(*args, **kwargs)
         self.epic_rgb_root = osp.join(epic_root, 'rgb_root')
         self.mask_dir = mask_dir
         self.hoa_root = osp.join(epic_root, 'hoa')
         self.image_size = image_size
+        self.crop_hand_mask = crop_hand_mask
 
         self.box_scale = np.asarray(image_size * 2) / ((1920, 1080) * 2)
         self.data_infos = self._read_image_sets(image_sets)
@@ -125,22 +130,14 @@ class EpicInference(Dataset):
                 - fg: 1, ignore -1, bg 0 
             cat: str, object categroy
         """
+        # image
         vid, nid, frame_idx, cat, side = self.data_infos[index]
         image = read_epic_image(
             vid, frame_idx, root=self.epic_rgb_root, as_pil=True)
         image = image.resize(self.image_size)
         image = np.asarray(image)
 
-        path = f'{self.mask_dir}/{vid}/frame_{frame_idx:010d}.png'
-        mask = Image.open(path).convert('P')
-        mask = mask.resize(self.image_size, Image.NEAREST)
-        mask = np.asarray(mask, dtype=np.float32)
-        mask_hand = np.zeros_like(mask)
-        mask_obj = np.zeros_like(mask)
-        side_name = f"{side} hand"
-        mask_hand[mask == epic_cats.index(side_name)] = 1
-        mask_obj[mask == epic_cats.index(cat)] = 1
-
+        # bboxes
         hand_entries = self._get_hand_entries(vid, frame_idx)
         hand_entry = hand_entries[hand_entries.side == side].iloc[0]
         r_hand = row2xywh(hand_entry)
@@ -150,6 +147,29 @@ class EpicInference(Dataset):
         obj_entries = self._get_obj_entries(vid, frame_idx)
         obj_entry = obj_entries.iloc[0]
         obj_bbox_arr = (row2xywh(obj_entry) * self.box_scale).astype(np.float32)
+
+        # masks
+        path = f'{self.mask_dir}/{vid}/frame_{frame_idx:010d}.png'
+        mask = Image.open(path).convert('P')
+        mask = mask.resize(self.image_size, Image.NEAREST)
+        mask = np.asarray(mask, dtype=np.float32)
+        mask_hand = np.zeros_like(mask)
+        mask_obj = np.zeros_like(mask)
+        side_name = f"{side} hand"
+        mask_hand[mask == epic_cats.index(side_name)] = 1
+        mask_obj[mask == epic_cats.index(cat)] = 1
+        if self.crop_hand_mask:
+            crop_expand = HAND_CROP_EXPAND
+            x0, y0, bw, bh = r_hand
+            x1, y1 = x0 + bw, y0 + bh
+            x0 -= bw * crop_expand / 2
+            y0 -= bh * crop_expand / 2
+            x1 += bw * crop_expand / 2
+            y1 += bh * crop_expand / 2
+            x0, y0, x1, y1 = map(int, (x0, y0, x1, y1))
+            mask_hand_crop = np.zeros_like(mask_hand)
+            mask_hand_crop[y0:y1, x0:x1] = mask_hand[y0:y1, x0:x1]
+            mask_hand = mask_hand_crop
 
         return image, hand_bbox_dict, obj_bbox_arr, mask_hand, mask_obj, cat
     
