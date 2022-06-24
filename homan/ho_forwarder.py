@@ -57,7 +57,10 @@ class HOForwarder(nn.Module):
                  optimize_mano=True,
                  optimize_mano_beta=True,
                  inter_type="centroid",
-                 image_size:int = 640):
+                 image_size:int = 640,
+
+                 ihoi_img_patch=None,
+                 ):
         """
         Hands are received in batch of [h_1_t_1, h_2_t_1, ..., h_1_t_2]
         (h_{hand_index}_t_{time_step})
@@ -68,8 +71,10 @@ class HOForwarder(nn.Module):
             target_masks_hand: used as _ref_mask_hand
             camintr_rois_object: from model.K.detach(),
                 and to be used in self.renderer
+            ihoi_img_patch: optional. Background of render_scene
         """
         super().__init__()
+        self.ihoi_img_patch = ihoi_img_patch
 
         """ Initialize object pamaters """
         if rotations_object.shape[-1] == 3:
@@ -273,6 +278,7 @@ class HOForwarder(nn.Module):
             scale = self.scale_hand
         rotations_hand = rot6d_to_matrix(self.rotations_hand)
         if self.hand_proj_mode == "ortho":
+            raise NotImplementedError
             return compute_transformation_ortho(
                 meshes=verts_hand_og,
                 cams=self.cams_hand,
@@ -382,10 +388,10 @@ class HOForwarder(nn.Module):
                 inter_verts_object = verts_object.unsqueeze(1).detach()
             else:
                 inter_verts_object = verts_object.unsqueeze(1)
+            verts_hand_b=verts_hand.view(-1, self.hand_nb, 778, 3)
             inter_loss_dict, inter_metric_dict = \
                 self.losses.compute_interaction_loss(
-                verts_hand_b=verts_hand.detach().clone().view(
-                    -1, self.hand_nb, 778, 3),
+                verts_hand_b=verts_hand_b,
                 verts_object_b=inter_verts_object)
             loss_dict.update(inter_loss_dict)
             metric_dict.update(inter_metric_dict)
@@ -433,14 +439,51 @@ class HOForwarder(nn.Module):
                 coor_sys='nr',
                 in_ndc=False
             ),
-            image=None,
-            # image=np.uint8(self._image_patch*256),
+            image=self.ihoi_img_patch*256,
         )
         return img
+
+    def render_triview(self, **mesh_kwargs) -> np.ndarray:
+        """
+        Returns:
+            (H, W, 3)
+        """
+        mhand, mobj = self.get_meshes(**mesh_kwargs)
+        front = projection.project_standardized(
+            [mhand, mobj],
+            direction='+z',
+            method=dict(
+                name='pytorch3d',
+                coor_sys='nr',
+                in_ndc=False
+            )
+        )
+        left = projection.project_standardized(
+            [mhand, mobj],
+            direction='+x',
+            method=dict(
+                name='pytorch3d',
+                coor_sys='nr',
+                in_ndc=False
+            )
+        )
+        back = projection.project_standardized(
+            [mhand, mobj],
+            direction='-z',
+            method=dict(
+                name='pytorch3d',
+                coor_sys='nr',
+                in_ndc=False
+            )
+        )
+        return np.hstack([front, left, back])
     
     @staticmethod
     def pack_homan_kwargs(context, sel_idx=0):
         """
+        Args:
+            sel: index into un-sorted iou array
+            
         Returns:
             a dict containing kwargs to initialize this class (HoForwarder)
         """
@@ -449,9 +492,10 @@ class HOForwarder(nn.Module):
         mask_hand = context.mask_hand
         mask_obj = context.mask_obj
 
-        _ious = pose_machine.pose_model()[1]
-        pose_idx = torch.sort(_ious, descending=True).indices[sel_idx].item()
-        print(f"pose_idx = {pose_idx}")
+        # _ious = pose_machine.pose_model()[1]
+        # pose_idx = torch.sort(_ious, descending=True).indices[sel_idx].item()
+        # print(f"pose_idx = {pose_idx}")
+        pose_idx = sel_idx
 
         _, target_masks_object, target_masks_hand = pose_machine._get_bbox_and_crop(
             mask_obj, mask_hand, obj_bbox)  # from global to local
@@ -486,7 +530,9 @@ class HOForwarder(nn.Module):
 
             image_size = pose_machine.rend_size,
 
-            optimize_object_scale = True)
+            optimize_object_scale = True,
+            ihoi_img_patch=pose_machine._image_patch
+            )
 
         for k, v in homan_kwargs.items():
             if hasattr(v, 'device'):
