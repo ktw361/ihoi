@@ -26,10 +26,10 @@ class OBJLoader:
     
     def __init__(self, 
                  obj_models_root='./weights/obj_models',
-                 return_simplemesh=False):
+                 load_simplified=True):
         self.obj_models_root = obj_models_root
-        self.return_simplemesh = return_simplemesh
         self.obj_models_cache = dict()
+        self.load_simplified = load_simplified
 
     def load_obj_by_name(self, name, return_mesh=False):
         """ 
@@ -42,7 +42,11 @@ class OBJLoader:
                 `vertices` and `faces`
         """
         if name not in self.obj_models_cache:
-            obj_path = os.path.join(self.obj_models_root, f"{name}.obj")
+            if self.load_simplified:
+                obj_name = f"{name}_simplified.obj"
+            else:
+                obj_name = f"{name}.obj"
+            obj_path = os.path.join(self.obj_models_root, obj_name)
             obj_scale = self.OBJ_SCALES[name]
             obj = trimesh.load(obj_path, force='mesh')
             verts = np.float32(obj.vertices)

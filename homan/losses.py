@@ -9,7 +9,6 @@ from homan.constants import INTERACTION_MAPPING, REND_SIZE
 from homan.utils.bbox import compute_iou
 from homan.utils.geometry import compute_dist_z
 
-from libyana import distutils
 from libyana.camutils import project
 from libyana.metrics.iou import batch_mask_iou
 
@@ -46,6 +45,28 @@ def project_bbox(vertices, renderer, bbox_expansion=0.0):
                                                               bbox_expansion)
         bboxes_xy = torch.cat([center - extent, center + extent], 1)
     return bboxes_xy
+
+
+def batch_pairwise_dist(x, y):
+    """
+    Args:
+        x: (B, P, D)
+    """
+    bs, num_points_x, points_dim = x.size()
+    _, num_points_y, _ = y.size()
+    xx = torch.bmm(x, x.transpose(2, 1))
+    yy = torch.bmm(y, y.transpose(2, 1))
+    zz = torch.bmm(x, y.transpose(2, 1))
+    diag_ind_x = torch.arange(0, num_points_x, device=x.device)
+    diag_ind_y = torch.arange(0, num_points_y, device=x.device)
+    rx = (
+        xx[:, diag_ind_x, diag_ind_x]
+        .unsqueeze(1)
+        .expand_as(zz.transpose(2, 1))
+    )
+    ry = yy[:, diag_ind_y, diag_ind_y].unsqueeze(1).expand_as(zz)
+    P = rx.transpose(2, 1) + ry - 2 * zz
+    return P
 
 
 class Losses():
@@ -138,17 +159,16 @@ class Losses():
     def compute_sil_loss_hand(self, verts, faces):
         loss_sil = torch.Tensor([0.0]).float().cuda()
         for i in range(len(verts)):
-            verts = verts[i].unsqueeze(0)
             camintr = self.camintr_rois_hand[i]
             # Rendering happens in ROI
             rend = self.renderer(
-                verts,  # TODO check why not verts[i]
+                verts[[i], ...],
                 faces[i],
                 K=camintr.unsqueeze(0),
                 mode="silhouettes")
-            image = self.keep_mask_hand[i] * rend
-            l_m = torch.sum((image - self.ref_mask_hand[i])**
-                            2) / self.keep_mask_hand[i].sum()
+            image = self.keep_mask_hand * rend
+            l_m = torch.sum((image - self.ref_mask_hand)**
+                            2) / self.keep_mask_hand.sum()
             loss_sil += l_m
         return {"loss_sil_hand": loss_sil / len(verts)}
 
@@ -189,14 +209,14 @@ class Losses():
                         if self.inter_type == "centroid":
                             inter_error = self.mse(v_p.mean(0), v_o.mean(0))
                         elif self.inter_type == "min":
-                            inter_error = distutils.batch_pairwise_dist(
+                            inter_error = batch_pairwise_dist(
                                 v_p.unsqueeze(0), v_o.unsqueeze(0)).min()
                         loss_inter += inter_error
                         num_interactions += 1
                 # Compute minimal vertex distance
                 with torch.no_grad():
                     min_dist = torch.sqrt(
-                        distutils.batch_pairwise_dist(
+                        batch_pairwise_dist(
                             verts_hand_b[:, person_idx],
                             verts_object_b[:, object_idx])).min(1)[0].min(1)[0]
                 min_dists.append(min_dist)

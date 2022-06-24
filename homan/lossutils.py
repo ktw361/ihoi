@@ -1,7 +1,4 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-# pylint: disable=import-error,no-member,wrong-import-order,too-many-arguments,too-many-instance-attributes,comparison-with-itself
-# pylint: disable=missing-function-docstring,missing-module-docstring
+from typing import List
 import numpy as np
 import torch
 
@@ -129,40 +126,41 @@ def compute_contact_loss(verts_hand_b, verts_object_b, faces_object,
     return {"loss_contact": missed_loss + contact_loss}, None
 
 
-def compute_ordinal_depth_loss(masks, silhouettes, depths):
+def compute_ordinal_depth_loss(masks:torch.Tensor, 
+                               silhouettes: List[torch.Tensor], 
+                               depths: List[torch.Tensor],
+                               ):
     """
     Args:
-        masks (torch.Tensor): B, obj_nb, height, width
-        silhouettes (list[torch.Tensor]): [(B, height, width), ...] of len obj_nb
-        depths (list[torch.Tensor]): [(B, height, width), ...] of len obj_nb
+        masks: (B, obj_nb, height, width), ground truth mask (spongy)
+        silhouettes: [(B, height, width), ...] of len obj_nb, Rendered silhouettes
+        depths: [(B, height, width), ...] of len obj_nb, Rendered depths
     """
-    loss = torch.Tensor(0.0).float().cuda()
-    num_pairs = 0
+    loss = torch.as_tensor(0.0).float().cuda()
+    num_pairs = 1e-7
     # Create square mask to match square renders
     height = masks.shape[2]
     width = masks.shape[3]
     silhouettes = [silh[:, :height, :width] for silh in silhouettes]
     depths = [depth[:, :height, :width] for depth in depths]
-    # TODO comment
-    imagify.viz_imgrow([
-        masks[0].sum(0), silhouettes[0][0], masks[0][0], silhouettes[1][0],
-        masks[0][1], silhouettes[2][0]
-    ], "tmpdebugsilor.png")
-    imagify.viz_imgrow(depths[0], "tmpdebugdepths.png")
     for i in range(len(silhouettes)):
         for j in range(len(silhouettes)):
+            if i == j:
+                continue
             has_pred = silhouettes[i] & silhouettes[j]
             pairs = (has_pred.sum([1, 2]) > 0).sum().item()
             if pairs == 0:
                 continue
             num_pairs += pairs
+            # front_i_gt: pixels which should be i (i closer), 
+            #   also exclude those being rendered as background as input mask 
+            #   may not align with rendered silhoueets perfectly
             front_i_gt = masks[:, i] & (~masks[:, j])
-            front_j_pred = depths[j] < depths[i]
+            front_j_pred = depths[j] < depths[i]  # but get j closer
             mask = front_i_gt & front_j_pred & has_pred
             if mask.sum() == 0:
                 continue
             dists = torch.clamp(depths[i] - depths[j], min=0.0, max=2.0)
-            loss += torch.sum(
-                torch.log(1 + torch.exp(dists))[mask]) / mask.sum()
+            loss += torch.sum(torch.log(1 + torch.exp(dists))[mask])
     loss /= num_pairs
     return {"loss_depth": loss}

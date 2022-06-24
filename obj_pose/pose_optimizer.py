@@ -1,3 +1,4 @@
+from typing import NamedTuple
 import os
 from tqdm import tqdm
 
@@ -63,6 +64,7 @@ class PoseOptimizer:
                  one_hand,
                  obj_loader,
                  hand_wrapper,
+                 ihoi_box_expand=0.5,
                  rend_size=REND_SIZE,
                  device='cuda',
                  ):
@@ -80,6 +82,7 @@ class PoseOptimizer:
         self.obj_loader = obj_loader
         self.hand_wrapper = hand_wrapper
         self.rend_size = rend_size
+        self.ihoi_box_expand = ihoi_box_expand
         self.device = device
 
         # Process one_hand
@@ -107,7 +110,6 @@ class PoseOptimizer:
 
         """ placeholder for cache after fitting """
         self._fit_model = None
-        self._obj_bbox = None
         self._full_image = None
     
     @property
@@ -260,7 +262,7 @@ class PoseOptimizer:
 
     def render_model_output(self, 
                             idx: int,
-                            kind: str):
+                            kind: str='ihoi'):
         """ 
         Args:
             idx: index into model.apply_transformation()
@@ -272,7 +274,8 @@ class PoseOptimizer:
         hand_mesh = self.hand_simplemesh
         global_cam = self.global_cam
         obj_mesh = SimpleMesh(self.pose_model.apply_transformation()[idx], 
-                              self.pose_model.faces[idx])
+                              self.pose_model.faces[idx],
+                              tex_color='yellow')
         if kind == 'global':
             img = projection.perspective_projection_by_camera(
                 [obj_mesh, hand_mesh],
@@ -332,8 +335,8 @@ class PoseOptimizer:
     def _get_bbox_and_crop(self, 
                            image, 
                            object_mask, 
-                           obj_bbox, 
-                           obj_bbox_expand=0.5):
+                           obj_bbox
+                           ):
         """ 
         Returns:
             obj_box_squared
@@ -344,7 +347,8 @@ class PoseOptimizer:
 
         """ Get `obj_bbox` and `obj_bbox_sqaured` both in XYWH"""
         obj_bbox_xyxy = xywh_to_xyxy(obj_bbox)
-        obj_bbox_squared_xyxy = image_utils.square_bbox(obj_bbox_xyxy, obj_bbox_expand)
+        obj_bbox_squared_xyxy = image_utils.square_bbox(
+            obj_bbox_xyxy, self.ihoi_box_expand)
         obj_bbox_squared = xyxy_to_xywh(obj_bbox_squared_xyxy)
 
         """ Get `image` and `mask` """
@@ -381,11 +385,9 @@ class PoseOptimizer:
             PoseRenderer
         """
         """ saved for self.render_model_output() """
-        self._obj_bbox = obj_bbox  
         self._full_image = image
         obj_bbox_squared, image_patch, obj_mask_patch = \
-            self._get_bbox_and_crop(image, object_mask, obj_bbox,
-                                    obj_bbox_expand=0.5)
+            self._get_bbox_and_crop(image, object_mask, obj_bbox)
         self._image_patch = image_patch
 
         """ Get global_camera. """
@@ -609,3 +611,10 @@ def find_optimal_pose(
     model.rotations = nn.Parameter(best_rots)
     model.translations = nn.Parameter(best_trans)
     return model
+
+
+class SavedContext(NamedTuple):
+    pose_machine: PoseOptimizer
+    obj_bbox: np.ndarray
+    mask_hand: np.ndarray
+    mask_obj: np.ndarray
