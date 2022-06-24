@@ -1,6 +1,6 @@
 import argparse
+import os
 import os.path as osp
-from random import sample
 
 import torch
 import trimesh
@@ -8,7 +8,7 @@ from nnutils.hand_utils import ManopthWrapper
 from nnutils.handmocap import get_handmocap_predictor
 from datasets.epic_inf import EpicInference
 
-from obj_pose.pose_optimizer import PoseOptimizer
+from obj_pose.pose_optimizer import PoseOptimizer, SavedContext
 from obj_pose.obj_loader import OBJLoader
 
 
@@ -21,11 +21,8 @@ def get_args():
     parser.add_argument(
         "--image_sets", 
         default='/home/skynet/Zhifan/data/epic_analysis/clean_frame_debug.txt')
-    parser.add_argument("--out", default="output", help="Dir to save output.")
+    parser.add_argument("--out", default="output/stage1", help="Dir to save output.")
     parser.add_argument("--view", default="ego_centric", help="Dir to save output.")
-    parser.add_argument("--merge_hand_mask", dest='merge_hand_mask', action='store_true')
-    parser.add_argument("--no-merge_hand_mask", dest='merge_hand_mask', action='store_false')
-    parser.set_defaults(merge_hand_mask=False)
 
     parser.add_argument(
         "--experiment",
@@ -69,7 +66,14 @@ def main(args):
         )
         vid, frame_idx = dataset.get_vid_frame(idx)
         sample_dir = osp.join(args.out, f"{vid}_{frame_idx}")
-        torch.save(pose_machine, osp.join(sample_dir, 'pose_machine.pth'))
+        context = SavedContext(
+            pose_machine=pose_machine,
+            obj_bbox=obj_bbox,
+            mask_hand=mask_hand,
+            mask_obj=mask_obj
+        )
+        os.makedirs(sample_dir, exist_ok=True)
+        torch.save(context, osp.join(sample_dir, 'saved_context.pth'))
 
 
 def retrieve_meshes(hand_mesh, model, idx, show_axis=False) -> trimesh.scene.Scene:
