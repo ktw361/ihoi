@@ -1,8 +1,12 @@
+from typing import NamedTuple
 import numpy as np
 import torch
 import torch.nn as nn
 import neural_renderer as nr
 from scipy.ndimage.morphology import distance_transform_edt
+
+from obj_pose.utils import compute_pairwise_dist
+from obj_pose.cluster_distance_matrix import cluster_distance_matrix
 
 from libyana.metrics import iou as ioumetrics
 
@@ -10,6 +14,16 @@ from homan.utils.geometry import rot6d_to_matrix
 
 
 REND_SIZE = 256
+
+
+class FitResult(NamedTuple):
+    # All content are already sorted by iou
+    verts: torch.Tensor
+    rotations: torch.Tensor
+    translations: torch.Tensor
+    loss_dict: dict
+    iou: torch.Tensor
+    image: torch.Tensor
 
 
 class PoseRenderer(nn.Module):
@@ -137,6 +151,48 @@ class PoseRenderer(nn.Module):
             self.compute_edges(image) * self.edt_ref_edge, dim=(1, 2))
         loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(verts)
         return loss_dict, iou, image
+    
+    # @cached_property
+    @property
+    def fitted_results(self):
+        """ At test-time, one should call self.inference()
+        instead of self.forward() to get sorted version of 
+        (verts, loss, iou, image)
+        """
+        loss_dict, iou, image = self.forward()
+        inds = torch.argsort(iou, descending=True)
+        for k, v in loss_dict.items():
+            loss_dict[k] = v[inds]
+        iou = iou[inds]
+        image = image[inds]
+        with torch.no_grad():
+            verts = self.apply_transformation()[inds]
+        rotations = self.rotations_matrix[inds]
+        translations = self.translations[inds]
+        return FitResult(verts, rotations, translations, loss_dict, iou, image)
+
+    def clustered_results(self, K):
+        _attr = f'_clustered_results_{K}'
+        if hasattr(self, _attr):
+            return getattr(self, _attr)
+        verts_orig = self.vertices.cpu().numpy()
+        fitted_results = self.fitted_results
+        rots = fitted_results.rotations.detach().cpu().numpy()
+        distance_matrix = compute_pairwise_dist(verts_orig, rots, verbose=True)
+        center_indices, clusters = cluster_distance_matrix(distance_matrix, K=K)
+        def indexing(obj, l):
+            if isinstance(obj, dict):
+                obj_out = dict()
+                for k, v in obj.items():
+                    obj_out[k] = v[l]
+                return obj_out
+            return obj[l]
+            
+        res = FitResult(*tuple(
+            indexing(getattr(fitted_results, k), center_indices) 
+            for k in fitted_results._fields))
+        setattr(self, _attr, res)
+        return res
 
     def render(self) -> np.ndarray:
         """
