@@ -273,7 +273,8 @@ class PoseOptimizer:
         """
         hand_mesh = self.hand_simplemesh
         global_cam = self.global_cam
-        obj_mesh = SimpleMesh(self.pose_model.apply_transformation()[idx], 
+        verts = self.pose_model.fitted_results.verts[idx]
+        obj_mesh = SimpleMesh(verts, 
                               self.pose_model.faces[idx],
                               tex_color='yellow')
         if kind == 'global':
@@ -300,6 +301,8 @@ class PoseOptimizer:
                 image=np.uint8(self._image_patch*256),
             )
             return img
+        elif kind == 'none':
+            return np.uint8(self._image_patch*256)
         else:
             raise ValueError(f"kind {kind} not unserstood")
 
