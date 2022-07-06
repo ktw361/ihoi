@@ -43,10 +43,11 @@ def main(args):
 
     device = 'cuda'
     # predict hand
-    hand_wrapper_flat = ManopthWrapper(flat_hand_mean=False).to(device)
+    hand_wrapper_left = ManopthWrapper(flat_hand_mean=False, side='left').to(device)
+    hand_wrapper_right = ManopthWrapper(flat_hand_mean=False, side='right').to(device)
     obj_loader = OBJLoader()
 
-    for idx, (image, hand_bbox_dict, obj_bbox,
+    for idx, (image, hand_bbox_dict, side, obj_bbox,
               mask_hand, mask_obj, cat) in enumerate(dataset):
 
         if idx % 10 == 0:
@@ -57,6 +58,12 @@ def main(args):
             image[..., ::-1], [hand_bbox_dict]
         )
 
+        if side == 'left_hand':
+            hand_wrapper_flat = hand_wrapper_left
+        elif side == 'right_hand':
+            hand_wrapper_flat = hand_wrapper_right
+        else:
+            raise ValueError
         # predict object
         pose_machine = PoseOptimizer(
             mocap_predictions[0]['right_hand'], obj_loader, hand_wrapper_flat,
@@ -73,7 +80,8 @@ def main(args):
             pose_machine=pose_machine,
             obj_bbox=obj_bbox,
             mask_hand=mask_hand,
-            mask_obj=mask_obj
+            mask_obj=mask_obj,
+            hand_side=side.replace('_hand', '')
         )
         os.makedirs(sample_dir, exist_ok=True)
         torch.save(context, osp.join(sample_dir, 'saved_context.pth'))
