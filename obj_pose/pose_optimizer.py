@@ -650,3 +650,4 @@ class SavedContext(NamedTuple):
     obj_bbox: np.ndarray
     mask_hand: np.ndarray
     mask_obj: np.ndarray
+    hand_side: str

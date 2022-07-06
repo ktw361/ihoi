@@ -103,7 +103,9 @@ class HOForwarder(nn.Module):
 
 
         """ Inititalize person parameters """
-        self.mano_model = HomanManoModel("externals/mano", pca_comps=45)  # TODO(zhifan): was 16
+        # TODO(zhifan): was 16
+        hand_side = hand_sides[0]
+        self.mano_model = HomanManoModel("externals/mano", side=hand_side, pca_comps=45)
         self.hand_proj_mode = hand_proj_mode
         translation_init = translations_hand.detach().clone()
         self.translations_hand = nn.Parameter(translation_init,
@@ -513,6 +515,7 @@ class HOForwarder(nn.Module):
         obj_bbox = context.obj_bbox
         mask_hand = context.mask_hand
         mask_obj = context.mask_obj
+        hand_side = context.hand_side
 
         pose_idx = sel_idx
         pose_idx = int(pose_idx)
@@ -532,7 +535,7 @@ class HOForwarder(nn.Module):
             translations_hand = pose_machine.hand_translation,
             rotations_hand = pose_machine.hand_rotation,
             verts_hand_og = pose_machine.hand_verts,
-            hand_sides = ['right'],
+            hand_sides = [hand_side],
             mano_trans = mano_trans,
             mano_rot = mano_rot,
             mano_betas = pose_machine.pred_hand_betas,

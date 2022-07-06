@@ -7,6 +7,10 @@ from manopth.manolayer import ManoLayer
 class HomanManoModel(nn.Module):
     
     def __init__(self, mano_root, side, pca_comps=16, batch_size=1):
+        """
+        Args:
+            side: one of {'left', 'right'}
+        """
         super().__init__()
         # assert pca_comps == 16
         self.mano_layer = ManoLayer(
@@ -19,7 +23,8 @@ class HomanManoModel(nn.Module):
     def forward_pca(self,
                     pca_pose,
                     rot=None,
-                    betas=None):
+                    betas=None,
+                    side=None):
         """ 
         Args:
             pca_pose: (?, pca_comps+) torch.Tensor
@@ -31,8 +36,6 @@ class HomanManoModel(nn.Module):
                 - verts: (batch_size, 778, 3)
                 - joints: (batch_size, 16, 3)
         """
-        flat_hand_mean = False
-
         if rot is None:
             rot = torch.zeros([1, 3], dtype=pca_pose.dtype, device=pca_pose.device)
 
