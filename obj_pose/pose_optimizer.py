@@ -65,7 +65,7 @@ class PoseOptimizer:
                  one_hand,
                  obj_loader,
                  hand_wrapper,
-                 ihoi_box_expand=0.5,
+                 ihoi_box_expand=1.0,
                  rend_size=REND_SIZE,
                  device='cuda',
                  ):
@@ -334,7 +334,7 @@ class PoseOptimizer:
                               viewpoint='nr')
 
     @staticmethod
-    def pad_and_crop(image, box, out_size: int):
+    def pad_and_crop(image, box, out_size: int) -> np.ndarray:
         """ Pad 0's if box exceeds boundary.
 
         Args:
@@ -345,8 +345,9 @@ class PoseOptimizer:
             img_crop: (crop_h, crop_w, ...) according to input
         """
         x, y, w, h = box
-        pad_x, pad_y = map(
-            lambda t: int(np.ceil(max(-t, 0))), (x, y))
+        img_h, img_w = image.shape[:2]
+        pad_x = max(max(-x ,0), max(x+w-img_w, 0))
+        pad_y = max(max(-y ,0), max(y+h-img_h, 0))
         transform = transforms.Compose(
             [transforms.ToTensor(),
             transforms.Pad([pad_x, pad_y])
@@ -360,7 +361,8 @@ class PoseOptimizer:
             int(y), int(x), int(h), int(w), size=[out_size, out_size],
             interpolation=transforms.InterpolationMode.NEAREST
         )
-        return crop_tensor.permute(0, 2, 3, 1).squeeze().numpy()
+        img_crop = crop_tensor.permute(0, 2, 3, 1).squeeze().numpy()
+        return img_crop
     
     def _get_bbox_and_crop(self, 
                            image, 
@@ -372,14 +374,13 @@ class PoseOptimizer:
             obj_box_squared
             image_patch: (H, W, 3) in [0, 1]
             object_mask_patch: (H, W) in [0, 1]
-
         """
 
         """ Get `obj_bbox` and `obj_bbox_sqaured` both in XYWH"""
         obj_bbox_xyxy = xywh_to_xyxy(obj_bbox)
         obj_bbox_squared_xyxy = image_utils.square_bbox(
             obj_bbox_xyxy, self.ihoi_box_expand)
-        obj_bbox_squared = xyxy_to_xywh(obj_bbox_squared_xyxy)
+        obj_bbox_squared = xyxy_to_xywh(obj_bbox_squared_xyxy).astype(int)
 
         """ Get `image` and `mask` """
         image_patch = self.pad_and_crop( 
@@ -422,11 +423,12 @@ class PoseOptimizer:
 
         """ Get global_camera. """
         if global_cam is None:
-            hand_h, hand_w = self._hand_bbox_proc[2:]
-            hand_cam = self.hand_cam
-            global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
-                self._hand_bbox_proc, self.FULL_HEIGHT, self.FULL_WIDTH
-            )
+            global_cam = self.global_cam
+            # hand_h, hand_w = self._hand_bbox_proc[2:]
+            # hand_cam = self.hand_cam
+            # global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
+            #     self._hand_bbox_proc, self.FULL_HEIGHT, self.FULL_WIDTH
+            # )
         self.ihoi_cam = global_cam.crop_and_resize(
             obj_bbox_squared, self.rend_size)
 
