@@ -1,5 +1,6 @@
 # --------------------------------------------------------
 # Written by Yufei Ye (https://github.com/JudyYe)
+# 2022.05: Modified by Zhifan ktw361@github
 # --------------------------------------------------------
 from __future__ import print_function
 import pickle
@@ -18,18 +19,18 @@ from nnutils import geom_utils
 
 
 class ManopthWrapper(nn.Module):
-    # TODO: mano
     def __init__(self, mano_path='externals/mano/', **kwargs):
         super().__init__()
-        self.mano_layer_right = ManoLayer(
-            mano_root=mano_path, side='right', use_pca=kwargs.get('use_pca', False), ncomps=kwargs.get('ncomps', 45),
+        side = kwargs['side']
+        self.mano_layer_side = ManoLayer(
+            mano_root=mano_path, side=side, use_pca=kwargs.get('use_pca', False), ncomps=kwargs.get('ncomps', 45),
             flat_hand_mean=kwargs.get('flat_hand_mean', True))
         self.metric = kwargs.get('metric', 1)
         
-        self.register_buffer('hand_faces', self.mano_layer_right.th_faces.unsqueeze(0))
-        self.register_buffer('hand_mean', torch.FloatTensor(self.mano_layer_right.smpl_data['hands_mean']).unsqueeze(0))
+        self.register_buffer('hand_faces', self.mano_layer_side.th_faces.unsqueeze(0))
+        self.register_buffer('hand_mean', torch.FloatTensor(self.mano_layer_side.smpl_data['hands_mean']).unsqueeze(0))
         self.register_buffer('t_mano', torch.tensor([[0.09566994, 0.00638343, 0.0061863]], dtype=torch.float32, ))
-        self.register_buffer('th_selected_comps', torch.FloatTensor(self.mano_layer_right.smpl_data['hands_components']))
+        self.register_buffer('th_selected_comps', torch.FloatTensor(self.mano_layer_side.smpl_data['hands_components']))
         self.register_buffer('inv_scale', 1. / torch.sum(self.th_selected_comps ** 2, dim=-1))  # (D, ))
 
         if osp.exists(osp.join(mano_path, 'contact_zones.pkl')):
@@ -40,7 +41,6 @@ class ManopthWrapper(nn.Module):
                     contact_list.extend(verts_idx)
                     self.register_buffer('contact_index_%d' % ind, torch.LongTensor(verts_idx))
             self.register_buffer('contact_index' , torch.LongTensor(contact_list))
-
 
     def forward(self, glb_se3, art_pose, axisang=None, trans=None, return_mesh=True, mode='outer', **kwargs) -> Tuple[Meshes, torch.Tensor]:
         N = len(art_pose)
@@ -126,7 +126,7 @@ class ManopthWrapper(nn.Module):
         return cTh_transform
 
     def _forward_layer(self, pose, trans, **kwargs):
-        verts, joints = self.mano_layer_right(pose, th_trans=trans, **kwargs) # in MM
+        verts, joints = self.mano_layer_side(pose, th_trans=trans, **kwargs) # in MM
         verts /= (1000 / self.metric)
         joints /= (1000 / self.metric)
 
@@ -152,10 +152,10 @@ class ManopthWrapper(nn.Module):
         th_rot_map = th_rot_map[:, 9:]
 
         # Full axis angle representation with root joint
-        th_shapedirs = self.mano_layer_right.th_shapedirs
-        th_betas = self.mano_layer_right.th_betas
-        th_J_regressor = self.mano_layer_right.th_J_regressor
-        th_v_template = self.mano_layer_right.th_v_template
+        th_shapedirs = self.mano_layer_side.th_shapedirs
+        th_betas = self.mano_layer_side.th_betas
+        th_J_regressor = self.mano_layer_side.th_J_regressor
+        th_v_template = self.mano_layer_side.th_v_template
 
         th_v_shaped = torch.matmul(th_shapedirs,
                                    th_betas.transpose(1, 0)).permute(

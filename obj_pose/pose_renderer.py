@@ -155,7 +155,7 @@ class PoseRenderer(nn.Module):
     # @cached_property
     @property
     def fitted_results(self):
-        """ At test-time, one should call self.inference()
+        """ At test-time, one should call self.fitted_results
         instead of self.forward() to get sorted version of 
         (verts, loss, iou, image)
         """

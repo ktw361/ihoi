@@ -1,4 +1,4 @@
-import enum
+import os
 import os.path as osp
 import argparse
 from PIL import Image
@@ -76,10 +76,13 @@ def main(args):
     if num_clusters > 0:
         obj_pose_results = ctx.pose_machine.pose_model.clustered_results(
             K=num_clusters)
+        save_dir = args.input_dir
     else:
         obj_pose_results = ctx.pose_machine.pose_model.fitted_results
-    ious = obj_pose_results.iou
+        save_dir = osp.join(args.input_dir, 'full')
+        os.makedirs(save_dir, exist_ok=True)
 
+    ious = obj_pose_results.iou
     for ind, iou in enumerate(ious):
         print(f"Processing sorted ind={ind}, iou={iou}")
         homan_kwargs = HOForwarder.pack_homan_kwargs(
@@ -93,7 +96,7 @@ def main(args):
             img_name = f"clu_{ind}_{int(iou*100):03d}.jpg"
         else:
             img_name = f"{ind}_{int(iou*100):03d}.jpg"
-        Image.fromarray(img_triview).save(osp.join(args.input_dir, img_name))
+        Image.fromarray(img_triview).save(osp.join(save_dir, img_name))
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ def get_args():
     parser = argparse.ArgumentParser(
         description="Simple Epic inference")
     parser.add_argument(
-        "--image_sets", 
+        "--image_sets",
         default='/home/skynet/Zhifan/data/epic_analysis/clean_frame_debug.txt')
     parser.add_argument("--out", default="output/stage1", help="Dir to save output.")
     parser.add_argument("--view", default="ego_centric", help="Dir to save output.")
@@ -49,6 +49,9 @@ def main(args):
     for idx, (image, hand_bbox_dict, obj_bbox,
               mask_hand, mask_obj, cat) in enumerate(dataset):
 
+        if idx % 10 == 0:
+            print(f"Processing {idx}/{len(dataset)}")
+
         hand_predictor = get_handmocap_predictor()
         mocap_predictions = hand_predictor.regress(
             image[..., ::-1], [hand_bbox_dict]
@@ -74,16 +77,6 @@ def main(args):
         )
         os.makedirs(sample_dir, exist_ok=True)
         torch.save(context, osp.join(sample_dir, 'saved_context.pth'))
-
-
-def retrieve_meshes(hand_mesh, model, idx, show_axis=False) -> trimesh.scene.Scene:
-    from libzhifan.geometry import SimpleMesh, visualize_mesh
-    idx = int(idx)
-    obj_v = model.apply_transformation()[idx]
-    obj_mesh = SimpleMesh(obj_v, model.faces[idx])
-    return visualize_mesh([hand_mesh, obj_mesh], 
-                          show_axis=show_axis,
-                         viewpoint='nr')
 
 
 if __name__ == "__main__":

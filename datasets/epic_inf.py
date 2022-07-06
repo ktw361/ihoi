@@ -10,7 +10,7 @@ from datasets.epic_lib import epichoa
 
 """ Epic-Kitchens Inference Datasetf """
 
-HAND_CROP_EXPAND = 0.2
+HAND_MASK_KEEP_EXPAND = 0.2
 
 epic_cats = [
     '_bg',
@@ -80,8 +80,8 @@ class EpicInference(Dataset):
             st_frame = int(st_frame)
             # side = '_'.join([side, 'hand'])
             # TODO support both sides
-            if side == 'left':
-                continue
+            # if side == 'left':
+            #     continue
             data_infos.append((
                 vid, nid, st_frame, cat, side))
         
@@ -115,7 +115,7 @@ class EpicInference(Dataset):
         Given an index, we also want to know which vid & frame 
         will be extracted by __getitem__
         """
-        vid, nid, frame_idx, cat, side = self.data_infos[index]
+        vid, _, frame_idx, _, _ = self.data_infos[index]
         return vid, frame_idx
 
     def __getitem__(self, index):
@@ -131,7 +131,7 @@ class EpicInference(Dataset):
             cat: str, object categroy
         """
         # image
-        vid, nid, frame_idx, cat, side = self.data_infos[index]
+        vid, _, frame_idx, cat, side = self.data_infos[index]
         image = read_epic_image(
             vid, frame_idx, root=self.epic_rgb_root, as_pil=True)
         image = image.resize(self.image_size)
@@ -140,9 +140,14 @@ class EpicInference(Dataset):
         # bboxes
         hand_entries = self._get_hand_entries(vid, frame_idx)
         hand_entry = hand_entries[hand_entries.side == side].iloc[0]
-        r_hand = row2xywh(hand_entry)
-        r_hand = r_hand * self.box_scale
-        hand_bbox_dict = dict(right_hand=r_hand, left_hand=None)
+        hand_box = row2xywh(hand_entry)
+        hand_box = hand_box * self.box_scale
+        if side == 'right':
+            hand_bbox_dict = dict(right_hand=hand_box, left_hand=None)
+        elif side == 'left':
+            hand_bbox_dict = dict(right_hand=None, left_hand=hand_box)
+        else:
+            raise ValueError(f"Unknown side {side}.")
 
         obj_entries = self._get_obj_entries(vid, frame_idx)
         obj_entry = obj_entries.iloc[0]
@@ -159,8 +164,8 @@ class EpicInference(Dataset):
         mask_hand[mask == epic_cats.index(side_name)] = 1
         mask_obj[mask == epic_cats.index(cat)] = 1
         if self.crop_hand_mask:
-            crop_expand = HAND_CROP_EXPAND
-            x0, y0, bw, bh = r_hand
+            crop_expand = HAND_MASK_KEEP_EXPAND
+            x0, y0, bw, bh = hand_box
             x1, y1 = x0 + bw, y0 + bh
             x0 -= bw * crop_expand / 2
             y0 -= bh * crop_expand / 2
@@ -171,7 +176,8 @@ class EpicInference(Dataset):
             mask_hand_crop[y0:y1, x0:x1] = mask_hand[y0:y1, x0:x1]
             mask_hand = mask_hand_crop
 
-        return image, hand_bbox_dict, obj_bbox_arr, mask_hand, mask_obj, cat
+        side = f"{side}_hand"
+        return image, hand_bbox_dict, side, obj_bbox_arr, mask_hand, mask_obj, cat
     
 
 if __name__ == '__main__':

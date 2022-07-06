@@ -5,6 +5,7 @@ from tqdm import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
+import trimesh
 
 import matplotlib.pyplot as plt
 import torchvision.transforms.functional as F
@@ -171,7 +172,7 @@ class PoseOptimizer:
         
         """
         M_pca_inv = torch.inverse(
-            self.hand_wrapper.mano_layer_right.th_comps)
+            self.hand_wrapper.mano_layer_side.th_comps)
         mano_pca_pose = self.pred_hand_pose.mm(M_pca_inv)
         return mano_pca_pose
 
@@ -262,7 +263,9 @@ class PoseOptimizer:
 
     def render_model_output(self, 
                             idx: int,
-                            kind: str='ihoi'):
+                            kind: str='ihoi',
+                            with_hand=True,
+                            with_obj=True):
         """ 
         Args:
             idx: index into model.apply_transformation()
@@ -277,9 +280,14 @@ class PoseOptimizer:
         obj_mesh = SimpleMesh(verts, 
                               self.pose_model.faces[idx],
                               tex_color='yellow')
+        mesh_list = []
+        if with_hand:
+            mesh_list.append(hand_mesh)
+        if with_obj:
+            mesh_list.append(obj_mesh)
         if kind == 'global':
             img = projection.perspective_projection_by_camera(
-                [obj_mesh, hand_mesh],
+                mesh_list,
                 global_cam,
                 method=dict(
                     name='pytorch3d',
@@ -291,7 +299,7 @@ class PoseOptimizer:
             return img
         elif kind == 'ihoi':
             img = projection.perspective_projection_by_camera(
-                [obj_mesh, hand_mesh],
+                mesh_list,
                 self.ihoi_cam,
                 method=dict(
                     name='pytorch3d',
@@ -305,6 +313,25 @@ class PoseOptimizer:
             return np.uint8(self._image_patch*256)
         else:
             raise ValueError(f"kind {kind} not unserstood")
+
+    def to_scene(self, idx: int, show_axis=True) -> trimesh.scene.Scene:
+        """ 
+        Args:
+            idx: index into model.apply_transformation()
+            kind: str, one of 
+                - 'global': render w.r.t full image
+                - 'ihoi': render w.r.t image prepared 
+                    according to process_mocap_predictions()
+        """
+        from libzhifan.geometry import SimpleMesh, visualize_mesh
+        hand_mesh = self.hand_simplemesh
+        verts = self.pose_model.fitted_results.verts[idx]
+        obj_mesh = SimpleMesh(verts, 
+                              self.pose_model.faces[idx],
+                              tex_color='yellow')
+        return visualize_mesh([hand_mesh, obj_mesh],
+                              show_axis=show_axis,
+                              viewpoint='nr')
 
     @staticmethod
     def pad_and_crop(image, box, out_size: int):
