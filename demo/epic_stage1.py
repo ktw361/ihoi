@@ -64,9 +64,10 @@ def main(args):
             hand_wrapper_flat = hand_wrapper_right
         else:
             raise ValueError
+        one_hand = mocap_predictions[0][side]
         # predict object
         pose_machine = PoseOptimizer(
-            mocap_predictions[0]['right_hand'], obj_loader, hand_wrapper_flat,
+            one_hand, obj_loader, hand_wrapper_flat,
             device=device,
         )
         pose_machine.fit_obj_pose(
