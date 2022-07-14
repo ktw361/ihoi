@@ -23,6 +23,8 @@ def get_args():
                         action='store_false')
     parser.set_defaults(compute_clusters=False)
     parser.add_argument("--clusters", default=10, type=int)
+    parser.add_argument("--select", default=-1, type=int,
+                        help="The cluster center to run")
 
     args = parser.parse_args()
     return args
@@ -102,6 +104,24 @@ def main(args):
         obj_pose_results = ctx.pose_machine.pose_model.fitted_results
         save_dir = osp.join(args.input_dir, 'full')
         os.makedirs(save_dir, exist_ok=True)
+
+    if args.select >= 0:
+        ind = args.select
+        iou = obj_pose_results.iou[ind]
+        print(f"Processing sorted ind={ind}, iou={iou}")
+        homan_kwargs = HOForwarder.pack_homan_kwargs(
+            ctx, ind, obj_pose_results=obj_pose_results)
+        torch.cuda.empty_cache()
+
+        homan = HOForwarder(**homan_kwargs).cuda()
+        homan, loss_dict, metric_dict = optimize_scale(homan)
+        img_triview = np.uint8(homan.render_summary())
+        if num_clusters > 0:
+            img_name = f"clu_{ind}_{int(iou*100):03d}.jpg"
+        else:
+            img_name = f"{ind}_{int(iou*100):03d}.jpg"
+        Image.fromarray(img_triview).save(osp.join(save_dir, img_name))
+        return
 
     infos = dict()
     ious = obj_pose_results.iou
