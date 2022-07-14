@@ -42,7 +42,7 @@ def main(args):
         image_sets=args.image_sets,
         merge_hand_mask=args.merge_hand_mask)
     
-    for idx, (image, hand_bbox_dict, obj_bbox, object_mask) in enumerate(dataset):
+    for idx, (image, hand_bbox_dict, obj_bbox, object_mask, cat) in enumerate(dataset):
         # res_img = visualizer.visualize(image, hand_bbox_list = hand_bbox_list)
         # demo_utils.save_image(res_img, osp.join(args.out, 'hand_bbox.jpg'))
 
