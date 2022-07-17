@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# From: https://github.com/JiangWenPL/multiperson/blob/4d3dbae945e22bb1e270521b061a837976699685/sdf/sdf/sdf_loss.py
 # -*- coding: utf-8 -*-
 from itertools import permutations
 
@@ -47,33 +48,6 @@ class SDFSceneLoss(nn.Module):
             boxes[i, 1, :] = vertices[i].max(dim=0)[0]
         return boxes
 
-    @torch.no_grad()
-    def check_overlap(self, bbox1, bbox2):
-        # check x
-        if bbox1[0, 0] > bbox2[1, 0] or bbox2[0, 0] > bbox1[1, 0]:
-            return False
-        #check y
-        if bbox1[0, 1] > bbox2[1, 1] or bbox2[0, 1] > bbox1[1, 1]:
-            return False
-        #check z
-        if bbox1[0, 2] > bbox2[1, 2] or bbox2[0, 2] > bbox1[1, 2]:
-            return False
-        return True
-
-    def filter_isolated_boxes(self, boxes):
-
-        num_people = boxes.shape[0]
-        isolated = torch.zeros(num_people,
-                               device=boxes.device,
-                               dtype=torch.bool)
-        for i in range(num_people):
-            isolated_i = False
-            for j in range(num_people):
-                if j != i:
-                    isolated_i |= not self.check_overlap(boxes[i], boxes[j])
-            isolated[i] = isolated_i
-        return isolated
-
     def forward(self, vertices, scale_factor=0.2):
         """
         Args:
@@ -100,7 +74,6 @@ class SDFSceneLoss(nn.Module):
         # scene_nb, object_nb, 2 (mins, maxs), 3 (xyz)
         scene_boxes = torch.stack(scene_boxes, 1)
 
-        # Filter out the isolated boxes
         scene_boxes_center = scene_boxes.mean(dim=2).unsqueeze(dim=2).permute(
             1, 0, 2, 3)
         scene_boxes_scale = ((scene_boxes[:, :, 1] - scene_boxes[:, :, 0]) *

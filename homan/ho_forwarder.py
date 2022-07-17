@@ -542,7 +542,8 @@ class HOForwarder(nn.Module):
             mano_pca_pose = pose_machine.recover_pca_pose(),
             faces_hand = pose_machine.hand_faces,
             
-            scale_object = 1.0,
+            scale_object = 1.5,
+            # scale_object = 0.7675090432167053,  # 1.5, 
             scale_hand = 1.0,
 
             camintr_rois_object = camintr_rois_object,

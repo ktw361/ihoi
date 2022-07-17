@@ -15,11 +15,11 @@ from libzhifan import io
 def get_args():
     parser = argparse.ArgumentParser(
         description="Simple Epic inference")
-    parser.add_argument("input_dir", 
+    parser.add_argument("input_dir",
                         help="Path to directory where saved_context.pth"
                         "can be found")
     parser.add_argument('--compute_clusters', action='store_true')
-    parser.add_argument('--no-compute_clusters', dest='compute_clusters', 
+    parser.add_argument('--no-compute_clusters', dest='compute_clusters',
                         action='store_false')
     parser.set_defaults(compute_clusters=False)
     parser.add_argument("--clusters", default=10, type=int)
@@ -68,6 +68,7 @@ def optimize_scale(homan, num_steps=100) -> HOForwarder:
             print(f"scale={homan.scale_object.item()}")
 
         loss.backward()
+        # print(f"grad_s: {homan.scale_object.grad.item()}")
         optimizer.step()
 
     loss_dict, metric_dict = homan(loss_weights=dict(
@@ -152,7 +153,7 @@ def main(args):
             metric_dict['handobj_maxdist'],
         ]
         infos[img_name] = entry
-    
+
     io.write_json(infos, osp.join(save_dir, 'infos.json'), indent=2)
 
 
