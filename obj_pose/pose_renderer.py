@@ -175,10 +175,10 @@ class PoseRenderer(nn.Module):
         _attr = f'_clustered_results_{K}'
         if hasattr(self, _attr):
             return getattr(self, _attr)
-        verts_orig = self.vertices.cpu().numpy()
+        verts_orig = self.vertices  # .cpu().numpy()
         fitted_results = self.fitted_results
-        rots = fitted_results.rotations.detach().cpu().numpy()
-        distance_matrix = compute_pairwise_dist(verts_orig, rots, verbose=True)
+        rots = fitted_results.rotations  # .detach().cpu().numpy()
+        distance_matrix = compute_pairwise_dist(verts_orig, rots, verbose=True).cpu().numpy()
         center_indices, clusters = cluster_distance_matrix(distance_matrix, K=K)
         def indexing(obj, l):
             if isinstance(obj, dict):
