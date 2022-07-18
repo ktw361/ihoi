@@ -77,8 +77,6 @@ class Losses():
         keep_mask_object,
         ref_mask_hand,
         keep_mask_hand,
-        camintr_rois_object,
-        camintr_rois_hand,
         camintr,
         class_name='default',
         inter_type="min",
@@ -97,10 +95,8 @@ class Losses():
         self.inter_type = inter_type
         self.ref_mask_object = ref_mask_object
         self.keep_mask_object = keep_mask_object
-        self.camintr_rois_object = camintr_rois_object
         self.ref_mask_hand = ref_mask_hand
         self.keep_mask_hand = keep_mask_hand
-        self.camintr_rois_hand = camintr_rois_hand
         # Necessary ! Otherwise camintr gets updated for some reason TODO check
         self.camintr = camintr.clone()
         self.thresh = 3  # z thresh for interaction loss
@@ -159,7 +155,7 @@ class Losses():
     def compute_sil_loss_hand(self, verts, faces):
         loss_sil = torch.Tensor([0.0]).float().cuda()
         for i in range(len(verts)):
-            camintr = self.camintr_rois_hand[i]
+            camintr = self.camintr[i]
             # Rendering happens in ROI
             rend = self.renderer(
                 verts[[i], ...],
@@ -175,7 +171,7 @@ class Losses():
     def compute_sil_loss_object(self, verts, faces):
         loss_sil = torch.Tensor([0.0]).float().cuda()
         # Rendering happens in ROI
-        camintr = self.camintr_rois_object
+        camintr = self.camintr
         rend = self.renderer(verts, faces, K=camintr, mode="silhouettes")
         image = self.keep_mask_object * rend
         l_m = torch.sum(

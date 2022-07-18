@@ -264,6 +264,7 @@ class PoseOptimizer:
     def render_model_output(self, 
                             idx: int,
                             kind: str='ihoi',
+                            clustered=True,
                             with_hand=True,
                             with_obj=True):
         """ 
@@ -314,7 +315,10 @@ class PoseOptimizer:
         else:
             raise ValueError(f"kind {kind} not unserstood")
 
-    def to_scene(self, idx: int, show_axis=True) -> trimesh.scene.Scene:
+    def to_scene(self, 
+                 idx: int, 
+                 clustered=True,
+                 show_axis=True) -> trimesh.scene.Scene:
         """ 
         Args:
             idx: index into model.apply_transformation()
@@ -325,7 +329,10 @@ class PoseOptimizer:
         """
         from libzhifan.geometry import SimpleMesh, visualize_mesh
         hand_mesh = self.hand_simplemesh
-        verts = self.pose_model.fitted_results.verts[idx]
+        if clustered:
+            verts = self.pose_model.clustered_results(10).verts[idx]
+        else:
+            verts = self.pose_model.fitted_results.verts[idx]
         obj_mesh = SimpleMesh(verts, 
                               self.pose_model.faces[idx],
                               tex_color='yellow')
@@ -390,18 +397,36 @@ class PoseOptimizer:
 
         return obj_bbox_squared, image_patch, obj_mask_patch
 
+    def finalize_without_fit(self,
+                            image,
+                            obj_bbox,
+                            object_mask):
+        """ saved for self.render_model_output() """
+        self._full_image = image
+        obj_bbox_squared, image_patch, obj_mask_patch = \
+            self._get_bbox_and_crop(image, object_mask, obj_bbox)
+        self._image_patch = image_patch
+
+        """ Get global_camera. """
+        global_cam = self.global_cam
+        self.ihoi_cam = global_cam.crop_and_resize(
+            obj_bbox_squared, self.rend_size)
+        return obj_bbox_squared, image_patch, obj_mask_patch
+
     def fit_obj_pose(self,
                      image,
                      obj_bbox,
                      object_mask,
                      cat,
-                     global_cam=None,
 
+                     rotations_init=None,
+                     translations_init=None,
                      num_initializations=400,
                      num_iterations=50,
                      debug=True,
                      sort_best=False,
                      viz=True,
+                     lr=1e-2,
                      ):
         """ 
         Args: See EpicInference dataset output.
@@ -415,26 +440,17 @@ class PoseOptimizer:
         Returns:
             PoseRenderer
         """
-        """ saved for self.render_model_output() """
-        self._full_image = image
         obj_bbox_squared, image_patch, obj_mask_patch = \
-            self._get_bbox_and_crop(image, object_mask, obj_bbox)
-        self._image_patch = image_patch
-
-        """ Get global_camera. """
-        if global_cam is None:
-            global_cam = self.global_cam
-            # hand_h, hand_w = self._hand_bbox_proc[2:]
-            # hand_cam = self.hand_cam
-            # global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
-            #     self._hand_bbox_proc, self.FULL_HEIGHT, self.FULL_WIDTH
-            # )
-        self.ihoi_cam = global_cam.crop_and_resize(
-            obj_bbox_squared, self.rend_size)
+            self.finalize_without_fit(
+            image, obj_bbox, object_mask)
 
         obj_mesh = self.obj_loader.load_obj_by_name(cat, return_mesh=False)
         vertices = torch.as_tensor(obj_mesh.vertices, device='cuda')
         faces = torch.as_tensor(obj_mesh.faces, device='cuda')
+
+        if rotations_init is not None and translations_init is not None:
+            assert len(rotations_init) == len(translations_init)
+            num_initializations = len(rotations_init)
 
         model = find_optimal_pose(
             vertices=vertices,
@@ -443,14 +459,17 @@ class PoseOptimizer:
             square_bbox=obj_bbox_squared,
             image=image_patch,
             mask=obj_mask_patch,
-            K_global=global_cam.get_K(),
+            K_global=self.global_cam.get_K(),
             image_size=(self.rend_size, self.rend_size),
 
+            rotations_init=rotations_init,
+            translations_init=translations_init,
             num_initializations=num_initializations,
             num_iterations=num_iterations,
             debug=debug,
             sort_best=sort_best,
             viz=viz,
+            lr=lr,
         )
 
         self._fit_model = model
@@ -474,6 +493,7 @@ def find_optimal_pose(
     viz_step=10,
     sort_best=True,
     rotations_init=None,
+    translations_init=None,
     viz=True,
 ):
     """
@@ -532,13 +552,10 @@ def find_optimal_pose(
 
     # Translation is retrieved by matching the tight bbox of projected
     # vertices with the bbox of the target mask
-    translations_init = compute_optimal_translation(
-        bbox_target=np.array(bbox) * REND_SIZE / L,
-        vertices=torch.matmul(vertices.unsqueeze(0), rotations_init),
-        f=K_global[0, 0, 0].item() / max(image_size))
-    translations_init = TCO_init_from_boxes_zup_autodepth(
-        bbox, torch.matmul(vertices.unsqueeze(0), rotations_init),
-        K_global).unsqueeze(1)
+    if translations_init is None:
+        translations_init = TCO_init_from_boxes_zup_autodepth(
+            bbox, torch.matmul(vertices.unsqueeze(0), rotations_init),
+            K_global).unsqueeze(1)
     if debug:
         # Debug shows initalized verts on image & mask
         trans_verts = translations_init + torch.matmul(vertices,
