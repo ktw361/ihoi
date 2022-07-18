@@ -72,8 +72,8 @@ class PoseRenderer(nn.Module):
         self.rotations = nn.Parameter(rotation_init.clone().float(),
                                       requires_grad=True)
         if rotation_init.shape[0] != translation_init.shape[0]:
-            translation_init = translation_init.repeat(num_initializations, 1,
-                                                       1)
+            translation_init = translation_init.repeat(
+                num_initializations, 1, 1)
         self.translations = nn.Parameter(translation_init.clone().float(),
                                          requires_grad=True)
         mask_edge = self.compute_edges(image_ref.unsqueeze(0)).cpu().numpy()

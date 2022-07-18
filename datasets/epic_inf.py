@@ -8,7 +8,7 @@ from datasets.epic_lib.epic_utils import read_epic_image
 from datasets.epic_lib import epichoa
 
 
-""" Epic-Kitchens Inference Datasetf """
+""" Epic-Kitchens Inference Dataset """
 
 HAND_MASK_KEEP_EXPAND = 0.2
 
@@ -172,6 +172,10 @@ class EpicInference(Dataset):
             x1 += bw * crop_expand / 2
             y1 += bh * crop_expand / 2
             x0, y0, x1, y1 = map(int, (x0, y0, x1, y1))
+            x0 = min(max(0, x0), mask.shape[1])
+            y0 = min(max(0, y0), mask.shape[0])
+            x1 = min(max(0, x1), mask.shape[1])
+            y1 = min(max(0, y1), mask.shape[0])
             mask_hand_crop = np.zeros_like(mask_hand)
             mask_hand_crop[y0:y1, x0:x1] = mask_hand[y0:y1, x0:x1]
             mask_hand = mask_hand_crop
