@@ -4,7 +4,6 @@ import neural_renderer as nr
 import numpy as np
 import torch
 from torch import nn
-from tqdm import tqdm
 
 from homan import lossutils
 from homan.losses import Losses
@@ -43,8 +42,6 @@ class HOForwarder(nn.Module):
                  mano_pca_pose,
                  faces_hand,
 
-                 camintr_rois_object,
-                 camintr_rois_hand,
                  camintr,
                  target_masks_object,
                  target_masks_hand,
@@ -52,7 +49,6 @@ class HOForwarder(nn.Module):
                  cams_hand=None,
                  scale_hand=1.0,
                  scale_object=1.0,
-                 optimize_object_scale=False,
                  optimize_ortho_cam=True,
                  hand_proj_mode="persp",
                  optimize_mano=True,
@@ -88,17 +84,12 @@ class HOForwarder(nn.Module):
             translations_object.detach().clone(),
             requires_grad=True)
         self.register_buffer("verts_object_og", verts_object_og)
-        self.optimize_object_scale = optimize_object_scale
-        if self.optimize_object_scale:
-            # Note we modify translation to be a function of scale:
-            # T(s) = s * T_init
-            self.scale_object = nn.Parameter(
-                scale_object * torch.ones(1).float(),
-                requires_grad=True,
-            )
-        else:
-            self.register_buffer("scale_object",
-                                 scale_object * torch.ones(1).float())
+        # Zhifan: Note we modify translation to be a function of scale:
+        # T(s) = s * T_init
+        self.scale_object = nn.Parameter(
+            torch.as_tensor(scale_object),
+            requires_grad=True,
+        )
         self.register_buffer("int_scale_object_mean", torch.ones(1).float())
 
 
@@ -135,7 +126,7 @@ class HOForwarder(nn.Module):
             self.mano_betas = nn.Parameter(torch.zeros_like(mano_betas),
                                            requires_grad=True)
             self.register_buffer("scale_hand",
-                                 torch.ones(1).float() * scale_hand)
+                                 torch.as_tensor(scale_hand))
         else:
             self.register_buffer("mano_betas", torch.zeros_like(mano_betas))
             self.scale_hand = nn.Parameter(
@@ -152,8 +143,6 @@ class HOForwarder(nn.Module):
         self.register_buffer("ref_mask_hand", (target_masks_hand > 0).float())
         self.register_buffer("keep_mask_hand",
                              (target_masks_hand >= 0).float())
-        self.register_buffer("camintr_rois_object", camintr_rois_object)
-        self.register_buffer("camintr_rois_hand", camintr_rois_hand)
 
         self.register_buffer("faces_object", faces_object)
         self.register_buffer(
@@ -200,8 +189,6 @@ class HOForwarder(nn.Module):
             keep_mask_object=self.keep_mask_object,
             ref_mask_hand=self.ref_mask_hand,
             keep_mask_hand=self.keep_mask_hand,
-            camintr_rois_object=self.camintr_rois_object,
-            camintr_rois_hand=self.camintr_rois_hand,
             camintr=self.camintr,
             class_name=class_name,
             hand_nb=self.hand_nb,
@@ -387,10 +374,7 @@ class HOForwarder(nn.Module):
                                                   len(verts_hand)))
         if loss_weights is None or loss_weights["lw_inter"] > 0:
             # Interaction acts only on hand !
-            if not self.optimize_object_scale:
-                inter_verts_object = verts_object.unsqueeze(1).detach()
-            else:
-                inter_verts_object = verts_object.unsqueeze(1)
+            inter_verts_object = verts_object.unsqueeze(1)
             verts_hand_b=verts_hand.view(-1, self.hand_nb, 778, 3)
             inter_loss_dict, inter_metric_dict = \
                 self.losses.compute_interaction_loss(
@@ -525,7 +509,7 @@ class HOForwarder(nn.Module):
         mano_pca_pose = pose_machine.recover_pca_pose()
         mano_rot = torch.zeros([1, 3], device=mano_pca_pose.device)
         mano_trans = torch.zeros([1, 3], device=mano_pca_pose.device)
-        camintr_rois_object = pose_machine.pose_model.K  # could be pose_machine.ihoi_cam
+        camintr = pose_machine.pose_model.K  # could be pose_machine.ihoi_cam
 
         homan_kwargs = dict(
             translations_object = obj_pose_results.translations[[pose_idx]],
@@ -546,15 +530,11 @@ class HOForwarder(nn.Module):
             # scale_object = 0.7675090432167053,  # 1.5, 
             scale_hand = 1.0,
 
-            camintr_rois_object = camintr_rois_object,
-            camintr_rois_hand = camintr_rois_object.clone(),
-            camintr = camintr_rois_object.clone(),
+            camintr = camintr,
             target_masks_hand = torch.as_tensor(target_masks_hand),
             target_masks_object = torch.as_tensor(target_masks_object),
 
             image_size = pose_machine.rend_size,
-
-            optimize_object_scale = True,
             ihoi_img_patch=pose_machine._image_patch
             )
 
