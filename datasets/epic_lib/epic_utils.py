@@ -7,7 +7,25 @@ import numpy as np
 from . import epichoa
 
 
-def read_epic_image(video_id, frame_idx, root='/home/skynet/Zhifan/data/epic_rgb_frames/', as_pil=False):
+def read_epic_image(video_id, 
+                    frame_idx, 
+                    root='/home/skynet/Zhifan/data/epic_analysis/visor_frames/', 
+                    as_pil=False):
+    """ Read VISOR image """
+    root = Path(root)
+    frame = root/video_id/f"frame_{frame_idx:010d}.jpg"
+    frame = Image.open(frame)
+    if as_pil:
+        return frame
+    return np.asarray(frame)
+
+
+def read_epic_image_old(video_id, 
+                        frame_idx, 
+                        root='/home/skynet/Zhifan/data/epic_rgb_frames/', 
+                        as_pil=False):
+    """ Read Epic-kitchens image """
+
     root = Path(root)
     frame = root/video_id[:3]/video_id/f"frame_{frame_idx:010d}.jpg"
     frame = Image.open(frame)
@@ -47,20 +65,3 @@ def convert_hoa_boxes(hoa_df,
     boxes = entries[['left', 'top', 'right', 'bottom']].to_numpy()
     boxes = boxes * scale
     return boxes
-
-
-# def visualize_hoa_boxes(vid, frame):
-#     global hoa_map
-#     hoa_df = None
-#     if vid in hoa_map:
-#         hoa_df = hoa_map[vid]
-#     else:
-#         hoa_map[vid] = epichoa.load_video_hoa(vid, hoa_root=HOA_ROOT)
-#         hoa_df = hoa_map[vid]
-
-#     img = read_epic_image(vid, frame)
-#     objs = convert_hoa_boxes(hoa_df, frame, 'object')
-#     hands = convert_hoa_boxes(hoa_df, frame, 'hand')
-#     img_pil = odlib.draw_bboxes_image_array(img, objs, color='green', thickness=1)
-#     odlib.draw_bboxes_image(img_pil, hands, color='red', thickness=1)
-#     return img_pil

@@ -52,7 +52,7 @@ class EpicInference(Dataset):
             crop_hand_mask: If True, will crop hand mask with only pixels
                 inside hand_bbox.
         """
-        super(EpicInference, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.epic_rgb_root = osp.join(epic_root, 'rgb_root')
         self.mask_dir = mask_dir
         self.hoa_root = osp.join(epic_root, 'hoa')
