@@ -94,7 +94,7 @@ class HOForwarder(nn.Module):
 
 
         """ Inititalize person parameters """
-        # TODO(zhifan): was 16
+        # TODO(zhifan): in HOMAN num_pca = 16
         hand_side = hand_sides[0]
         self.mano_model = HomanManoModel("externals/mano", side=hand_side, pca_comps=45)
         self.hand_proj_mode = hand_proj_mode
@@ -400,11 +400,13 @@ class HOForwarder(nn.Module):
         return loss_dict, metric_dict
 
     def get_meshes(self, **mesh_kwargs) -> List[SimpleMesh]:
+        hand_color = mesh_kwargs.pop('hand_color', 'light_blue')
+        obj_color = mesh_kwargs.pop('obj_color', 'yellow')
         with torch.no_grad():
             verts_obj = self.get_verts_object(**mesh_kwargs)
             verts_hand = self.get_verts_hand(**mesh_kwargs)
-            mhand = SimpleMesh(verts_hand, self.faces_hand)
-            mobj = SimpleMesh(verts_obj, self.faces_object, tex_color='yellow')
+            mhand = SimpleMesh(verts_hand, self.faces_hand, tex_color=hand_color)
+            mobj = SimpleMesh(verts_obj, self.faces_object, tex_color=obj_color)
         return mhand, mobj
         
     def to_scene(self, show_axis=False, viewpoint='nr', **mesh_kwargs):

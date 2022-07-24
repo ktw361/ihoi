@@ -1,7 +1,8 @@
 import os.path as osp
-import numpy as np
 from PIL import Image
 
+import numpy as np
+import torch
 from torch.utils.data import Dataset
 
 from datasets.epic_lib.epic_utils import read_epic_image
@@ -36,7 +37,8 @@ class EpicInference(Dataset):
     def __init__(self,
                  image_sets='/home/skynet/Zhifan/data/epic_analysis/interpolation',
                  epic_root='/home/skynet/Zhifan/datasets/epic',
-                 mask_dir='/home/skynet/Zhifan/data/epic_analysis/interpolation',
+                 epic_rgb_root='/home/skynet/Zhifan/data/epic_analysis/visor_frames/',
+                 mask_dir='/home/skynet/Zhifan/data/epic_analysis/InterpV2',
                  image_size=(1280, 720), # (640, 360),
                  crop_hand_mask=False,
                  *args,
@@ -53,7 +55,7 @@ class EpicInference(Dataset):
                 inside hand_bbox.
         """
         super().__init__(*args, **kwargs)
-        self.epic_rgb_root = osp.join(epic_root, 'rgb_root')
+        self.epic_rgb_root = epic_rgb_root
         self.mask_dir = mask_dir
         self.hoa_root = osp.join(epic_root, 'hoa')
         self.image_size = image_size
@@ -78,10 +80,6 @@ class EpicInference(Dataset):
                 v for v in line.split(' ') if len(v) > 0]
             vid = '_'.join(nid.split('_')[:2])
             st_frame = int(st_frame)
-            # side = '_'.join([side, 'hand'])
-            # TODO support both sides
-            # if side == 'left':
-            #     continue
             data_infos.append((
                 vid, nid, st_frame, cat, side))
         
@@ -123,10 +121,11 @@ class EpicInference(Dataset):
         Returns:
             image: ndarray (H, W, 3) RGB
                 note frankmocap requires `BGR` input
+                image is in numpy format as it doesn't participate optimization
             hand_bbox_dict: dict
                 - left_hand/right_hand: ndarray (4,) of (x1, y1, w, h)
-            obj_bbox_arr: (4,) xywh
-            object_mask: (H, W) 
+            obj_bbox_ten: torch.Tensor (4,) xywh
+            object_mask: torch.Tensor (H, W) 
                 - fg: 1, ignore -1, bg 0 
             cat: str, object categroy
         """
@@ -181,7 +180,11 @@ class EpicInference(Dataset):
             mask_hand = mask_hand_crop
 
         side = f"{side}_hand"
-        return image, hand_bbox_dict, side, obj_bbox_arr, mask_hand, mask_obj, cat
+        obj_bbox_ten = torch.as_tensor(obj_bbox_arr)
+        mask_hand = torch.as_tensor(mask_hand)
+        mask_obj = torch.as_tensor(mask_obj)
+
+        return image, hand_bbox_dict, side, obj_bbox_ten, mask_hand, mask_obj, cat
     
 
 if __name__ == '__main__':

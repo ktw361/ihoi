@@ -28,14 +28,13 @@ from libyana.visutils import imagify
 
 from homan.lib3d.optitrans import (
     TCO_init_from_boxes_zup_autodepth,
-    compute_optimal_translation,
 )
 from homan.utils.geometry import (
     compute_random_rotations,
     matrix_to_rot6d,
 )
 
-""" 
+"""
 Refinement-based pose optimizer.
 
 Origin: homan/pose_optimization.py
@@ -50,18 +49,20 @@ class PoseOptimizer:
     FULL_HEIGHT = 720
     FULL_WIDTH = 1280
 
-    """ 
+    NUM_CLUSTERS = 10
+
+    """
     This class 1) parses mocap_prediction, and 2) performs obj pose fitting.
 
     Note: Bounding boxes mentioned in the pipeline:
 
-    `hand_bbox`, `obj_bbox`: original boxes labels in epichoa 
+    `hand_bbox`, `obj_bbox`: original boxes labels in epichoa
     `hand_bbox_proc`: processed hand_bbox during mocap regressing
     `obj_bbox_squared`: squared obj_bbox before diff rendering
 
     """
 
-    def __init__(self, 
+    def __init__(self,
                  one_hand,
                  obj_loader,
                  hand_wrapper,
@@ -69,10 +70,10 @@ class PoseOptimizer:
                  rend_size=REND_SIZE,
                  device='cuda',
                  ):
-        """ 
+        """
         Args:
             hand_wrapper: Non flat ManoWrapper
-                e.g. 
+                e.g.
                     hand_wrapper = ManopthWrapper(
                         flat_hand_mean=False,
                         use_pca=False,
@@ -96,7 +97,7 @@ class PoseOptimizer:
         self._hand_rotation, self._hand_translation = self._compute_hand_transform(
             rot_axisang, _pred_hand_pose, pred_camera)
         _hand_verts_orig, _hand_verts, hand_cam, global_cam = self._calc_hand_mesh(
-            _pred_hand_pose, _pred_hand_betas, 
+            _pred_hand_pose, _pred_hand_betas,
             _hand_bbox_proc
         )
 
@@ -112,7 +113,7 @@ class PoseOptimizer:
         """ placeholder for cache after fitting """
         self._fit_model = None
         self._full_image = None
-    
+
     @property
     def pred_hand_pose(self):
         return self._pred_hand_pose
@@ -128,12 +129,12 @@ class PoseOptimizer:
     @property
     def hand_verts(self):
         return self._hand_verts
-    
+
     @property
     def hand_verts_orig(self):
         """ hand_verts before applying [self.hand_rotation | self.hand_translation] """
         return self._hand_verts_orig
-    
+
     @property
     def hand_cam(self):
         return self._hand_cam
@@ -144,7 +145,7 @@ class PoseOptimizer:
             raise ValueError("model not fitted yet.")
         else:
             return self._fit_model
-    
+
     @property
     def hand_simplemesh(self):
         return SimpleMesh(self.hand_verts, self.hand_faces)
@@ -158,18 +159,18 @@ class PoseOptimizer:
         return self._hand_translation
 
     def recover_pca_pose(self):
-        """ 
-        if 
+        """
+        if
             v_exp = ManopthWrapper(pca=False, flat=False).(x_0)
             x_pca = self.recover_pca_pose(self.x_0)  # R^45
         then
             v_act = ManoLayer(pca=True, flat=False, ncomps=45).forward(x_pca)
             v_exp == v_act
-        
-        note above requires mano_rot == zeros, since the computation of rotation 
+
+        note above requires mano_rot == zeros, since the computation of rotation
             is different in ManopthWrapper
-        
-        
+
+
         """
         M_pca_inv = torch.inverse(
             self.hand_wrapper.mano_layer_side.th_comps)
@@ -177,18 +178,18 @@ class PoseOptimizer:
         return mano_pca_pose
 
     def _compute_hand_transform(self, rot_axisang, pred_hand_pose, pred_camera):
-        """ 
+        """
         Args:
             rot_axisang: (1, 3)
             pred_hand_pose: (1, 45)
             pred_camera:
-        
+
         Returns:
             rotation: (1, 3, 3) row-vec
             translation: (1, 3)
         """
         rotation = rot_cvt.axis_angle_to_matrix(rot_axisang)  # (1, 3) - > (1, 3, 3)
-        rot_homo = geom_utils.rt_to_homo(rotation) 
+        rot_homo = geom_utils.rt_to_homo(rotation)
         glb_rot = geom_utils.matrix_to_se3(rot_homo)  # (1, 4, 4) -> (1, 12)
         _, joints = self.hand_wrapper(
             glb_rot,
@@ -200,19 +201,19 @@ class PoseOptimizer:
         translation = translate - joints[:, 5]
         rotation_row = rotation.transpose(1, 2)
         return rotation_row, translation
-        
-    def _calc_hand_mesh(self, 
+
+    def _calc_hand_mesh(self,
                         pred_hand_pose,
                         pred_hand_betas,
                         hand_bbox_proc,
                         ):
-        """ 
+        """
 
-        When Ihoi predict the MANO params, 
+        When Ihoi predict the MANO params,
         it takes the `hand_bbox_list` from dataset,
         then pad_resize the bbox, which results in the `bbox_processed`.
 
-        The MANO params are predicted in 
+        The MANO params are predicted in
             global_cam.crop(hand_bbox).resize(224, 224),
         so we need to emulate this process, see CameraManager below.
 
@@ -221,10 +222,10 @@ class PoseOptimizer:
             pred_hand_pose: (1, 45)
             pred_hand_betas: Unused
             pred_camera: used for translate hand_mesh to convert hand_mesh
-                so that result in a weak perspective camera. 
+                so that result in a weak perspective camera.
             bbox_processed: bounding box for hand
                 this box should be used in mocap_predictor
-            
+
         Returns:
             hand_mesh: (1, V, 3) torch.Tensor
             hand_camera: CameraManager
@@ -246,9 +247,9 @@ class PoseOptimizer:
             hand_bbox_proc, self.FULL_HEIGHT, self.FULL_WIDTH
         )
         return v_orig, v_transformed, hand_cam, global_cam
-    
+
     def _hand_cam_from_bbox(self, hand_bbox):
-        """ 
+        """
         Args:
             hand_bbox: (4,) in global screen space
                 possibly hand_bbox processed after mocap
@@ -261,24 +262,28 @@ class PoseOptimizer:
         ).resize(hand_crop_h, hand_crop_w)
         return hand_cam
 
-    def render_model_output(self, 
+    def render_model_output(self,
                             idx: int,
                             kind: str='ihoi',
                             clustered=True,
                             with_hand=True,
                             with_obj=True):
-        """ 
+        """
         Args:
             idx: index into model.apply_transformation()
-            kind: str, one of 
+            kind: str, one of
                 - 'global': render w.r.t full image
-                - 'ihoi': render w.r.t image prepared 
+                - 'ihoi': render w.r.t image prepared
                     according to process_mocap_predictions()
         """
         hand_mesh = self.hand_simplemesh
         global_cam = self.global_cam
-        verts = self.pose_model.fitted_results.verts[idx]
-        obj_mesh = SimpleMesh(verts, 
+        if clustered:
+            verts = self.pose_model.clustered_results(
+                self.NUM_CLUSTERS).verts[idx]
+        else:
+            verts = self.pose_model.fitted_results.verts[idx]
+        obj_mesh = SimpleMesh(verts,
                               self.pose_model.faces[idx],
                               tex_color='yellow')
         mesh_list = []
@@ -315,25 +320,26 @@ class PoseOptimizer:
         else:
             raise ValueError(f"kind {kind} not unserstood")
 
-    def to_scene(self, 
-                 idx: int, 
+    def to_scene(self,
+                 idx: int,
                  clustered=True,
                  show_axis=True) -> trimesh.scene.Scene:
-        """ 
+        """
         Args:
             idx: index into model.apply_transformation()
-            kind: str, one of 
+            kind: str, one of
                 - 'global': render w.r.t full image
-                - 'ihoi': render w.r.t image prepared 
+                - 'ihoi': render w.r.t image prepared
                     according to process_mocap_predictions()
         """
         from libzhifan.geometry import SimpleMesh, visualize_mesh
         hand_mesh = self.hand_simplemesh
         if clustered:
-            verts = self.pose_model.clustered_results(10).verts[idx]
+            verts = self.pose_model.clustered_results(
+                self.NUM_CLUSTERS).verts[idx]
         else:
             verts = self.pose_model.fitted_results.verts[idx]
-        obj_mesh = SimpleMesh(verts, 
+        obj_mesh = SimpleMesh(verts,
                               self.pose_model.faces[idx],
                               tex_color='yellow')
         return visualize_mesh([hand_mesh, obj_mesh],
@@ -341,73 +347,76 @@ class PoseOptimizer:
                               viewpoint='nr')
 
     @staticmethod
-    def pad_and_crop(image, box, out_size: int) -> np.ndarray:
+    def pad_and_crop(image: torch.Tensor,
+                     box: torch.Tensor,
+                     out_size: int) -> torch.Tensor:
         """ Pad 0's if box exceeds boundary.
 
         Args:
-            image: (H, W) or (H, W, 3)
-            box: (4,) xywh
+            image: torch.Tensor (H, W) or (C, H, W)
+            box: torch.Tensor (4,) xywh
             out_size: int
+
         Returns:
-            img_crop: (crop_h, crop_w, ...) according to input
+            img_crop: torch.Tensor (..., crop_h, crop_w) according to input
+                in [0, 1]
         """
+        # Lift everying to (C, H, W)
+        orig_dim = image.dim()
+        if orig_dim == 2:
+            image = image.unsqueeze(0)
+
         x, y, w, h = box
         img_h, img_w = image.shape[:2]
         pad_x = max(max(-x ,0), max(x+w-img_w, 0))
         pad_y = max(max(-y ,0), max(y+h-img_h, 0))
         transform = transforms.Compose(
-            [transforms.ToTensor(),
-            transforms.Pad([pad_x, pad_y])
-            ])
+            [transforms.Pad([pad_x, pad_y])])
         x += pad_x
         y += pad_y
 
         image_pad = transform(image)
         crop_tensor = F.resized_crop(
-            torch.as_tensor(image_pad)[None],
+            image_pad.unsqueeze_(0),
             int(y), int(x), int(h), int(w), size=[out_size, out_size],
             interpolation=transforms.InterpolationMode.NEAREST
         )
-        img_crop = crop_tensor.permute(0, 2, 3, 1).squeeze().numpy()
+        img_crop = crop_tensor[0]
+        if orig_dim == 2:
+            img_crop = img_crop[0]
+        # img_crop = crop_tensor.permute(0, 2, 3, 1)
         return img_crop
-    
-    def _get_bbox_and_crop(self, 
-                           image, 
-                           object_mask, 
-                           obj_bbox
-                           ):
-        """ 
-        Returns:
-            obj_box_squared
-            image_patch: (H, W, 3) in [0, 1]
-            object_mask_patch: (H, W) in [0, 1]
+
+    def finalize_without_fit(self,
+                             image,
+                             obj_bbox,
+                             object_mask):
         """
+        Args:
+            image: np.ndarray (H, W, 3)
+            object_mask: torch.Tensor (H, W)
+            obj_bbox: torch.Tensor (4,)
 
-        """ Get `obj_bbox` and `obj_bbox_sqaured` both in XYWH"""
-        obj_bbox_xyxy = xywh_to_xyxy(obj_bbox)
-        obj_bbox_squared_xyxy = image_utils.square_bbox(
-            obj_bbox_xyxy, self.ihoi_box_expand)
-        obj_bbox_squared = xyxy_to_xywh(obj_bbox_squared_xyxy).astype(int)
-
-        """ Get `image` and `mask` """
-        image_patch = self.pad_and_crop( 
-            image, obj_bbox_squared, self.rend_size)
+        Returns:
+            obj_bbox_squared: torch.Tensor (4,)
+            image_patch: np.ndarray (h, w, 3)
+            obj_mask_patch: torch.Tensor (h, w)
+        """
+        obj_bbox_squared = image_utils.square_bbox_xywh(
+            obj_bbox).int()
         obj_mask_patch = self.pad_and_crop(
             object_mask, obj_bbox_squared, self.rend_size)
 
-        return obj_bbox_squared, image_patch, obj_mask_patch
+        image = transforms.ToTensor()(image)
+        image_patch = self.pad_and_crop(
+            image, obj_bbox_squared, self.rend_size)
+        image_patch = np.asarray(transforms.ToPILImage()(image_patch))
 
-    def finalize_without_fit(self,
-                            image,
-                            obj_bbox,
-                            object_mask):
         """ saved for self.render_model_output() """
-        self._full_image = image
-        obj_bbox_squared, image_patch, obj_mask_patch = \
-            self._get_bbox_and_crop(image, object_mask, obj_bbox)
         self._image_patch = image_patch
+        self._full_image = image
 
-        """ Get global_camera. """
+        """ Get camera """
         global_cam = self.global_cam
         self.ihoi_cam = global_cam.crop_and_resize(
             obj_bbox_squared, self.rend_size)
@@ -427,8 +436,10 @@ class PoseOptimizer:
                      sort_best=False,
                      viz=True,
                      lr=1e-2,
+
+                     put_hand_transform=False,
                      ):
-        """ 
+        """
         Args: See EpicInference dataset output.
             image: (H, W, 3) torch.Tensor. possibly (720, 1280, 3)
             obj_bbox: (4,)
@@ -436,12 +447,11 @@ class PoseOptimizer:
             cat: str
             hand_bbox:processed: (4,)
                 Note this differs from `hand_bbox` directly from dataset
-            
+
         Returns:
             PoseRenderer
         """
-        obj_bbox_squared, image_patch, obj_mask_patch = \
-            self.finalize_without_fit(
+        obj_bbox_squared, _, obj_mask_patch = self.finalize_without_fit(
             image, obj_bbox, object_mask)
 
         obj_mesh = self.obj_loader.load_obj_by_name(cat, return_mesh=False)
@@ -452,18 +462,22 @@ class PoseOptimizer:
             assert len(rotations_init) == len(translations_init)
             num_initializations = len(rotations_init)
 
+        base_rotation = base_translation = None
+        if put_hand_transform:
+            base_rotation = self.hand_rotation
+            base_translation = self.hand_translation
         model = find_optimal_pose(
             vertices=vertices,
             faces=faces,
-            bbox=obj_bbox,
-            square_bbox=obj_bbox_squared,
-            image=image_patch,
-            mask=obj_mask_patch,
-            K_global=self.global_cam.get_K(),
-            image_size=(self.rend_size, self.rend_size),
+            bbox=obj_bbox[None],
+            square_bbox=obj_bbox_squared[None],
+            mask=obj_mask_patch[None],
+            K_global=torch.as_tensor(self.global_cam.get_K())[None],
 
             rotations_init=rotations_init,
             translations_init=translations_init,
+            base_rotation=base_rotation,
+            base_translation=base_translation,
             num_initializations=num_initializations,
             num_iterations=num_iterations,
             debug=debug,
@@ -482,32 +496,33 @@ def find_optimal_pose(
     mask,
     bbox,
     square_bbox,
-    image_size,
     K_global,
     num_iterations=50,
     num_initializations=2000,
     lr=1e-2,
-    image=None,
     debug=True,
     viz_folder="output/tmp",
     viz_step=10,
     sort_best=True,
     rotations_init=None,
     translations_init=None,
-    viz=True,
-):
+    base_rotation=None,
+    base_translation=None,
+    viz=True):
     """
     Args:
-        vertices: torch.Tensor
-        faces: torch.Tensor
-        mask: 1 for fg, 0 for bg, -1 for ignored
-        bbox: XYWH, bbox from original data source. E.g. epichoa
-        square_bbox: XYWH, Enlarged and squared from `bbox`
+        vertices: torch.Tensor (V, 3)
+        faces: torch.Tensor (F, 3)
+        mask: troch.Tensor (B, W, W)
+            1 for fg, 0 for bg, -1 for ignored
+        bbox: torch.Tensor (B, 4)
+            XYWH bbox from original data source. E.g. epichoa
+        square_bbox: torch.Tensor (B, 4)
+            XYWH Enlarged and squared from `bbox`
             The box that matches `mask`
-        image_size:
-        K: (3, 3) ndarray, represents the global camera that
+        K_global: torch.Tensor (B, 3, 3), represents the global camera that
             captures the original image.
-        
+
     Returns:
         A PoseRenderer Object,
             - __call__():
@@ -522,13 +537,11 @@ def find_optimal_pose(
     """
     os.makedirs(viz_folder, exist_ok=True)
     device = vertices.device
-    ts = 1
-    textures = torch.ones(faces.shape[0], ts, ts, ts, 3,
-                          dtype=torch.float32, device=device)
-    x, y, b, _ = square_bbox
-    L = max(image_size[:2])
+
+    x, y, b, _ = torch.split(square_bbox, [1, 1, 1, 1], dim=1)  # x,y,b: (B,1)
+    crop_boxes = torch.cat([x, y, x+b, y+b], dim=1)  # (B, 4)
     camintr_bbox = kcrop.get_K_crop_resize(
-        torch.Tensor(K_global).unsqueeze(0), torch.tensor([[x, y, x + b, y + b]]),
+        torch.as_tensor(K_global), crop_boxes,
         [REND_SIZE]).to(device)
     # Equivalently: K.crop(square_box).resize(REND_SIZE)
 
@@ -540,7 +553,7 @@ def find_optimal_pose(
     best_rots_single = None
     best_trans_single = None
     loop = tqdm(total=num_iterations)
-    K_global = npt.tensorify(K_global).unsqueeze(0).to(vertices.device)
+    K_global = K_global.to(device)
     # Mask is in format 256 x 256 (REND_SIZE x REND_SIZE)
     # bbox is in xywh in original image space
     # K is in pixel space
@@ -552,11 +565,25 @@ def find_optimal_pose(
 
     # Translation is retrieved by matching the tight bbox of projected
     # vertices with the bbox of the target mask
+    if base_rotation is None:
+        base_rotation = torch.eye(
+            3, dtype=rotations_init.dtype, device=device).unsqueeze_(0)
+    else:
+        base_rotation = base_rotation.clone()
+    if base_translation is None:
+        base_translation = torch.zeros(
+            [1, 3], dtype=rotations_init.dtype, device=device)
+    else:
+        base_translation = base_translation.clone()
+
+    V_rotated = vertices[None] @ base_rotation @ rotations_init
     if translations_init is None:
         translations_init = TCO_init_from_boxes_zup_autodepth(
-            bbox, torch.matmul(vertices.unsqueeze(0), rotations_init),
-            K_global).unsqueeze(1)
+            bbox, V_rotated, K_global).unsqueeze(1)
+    translations_init -= base_translation @ rotations_init
+
     if debug:
+        mask_viz = mask[0]  # select 0-th mask for visualization
         # Debug shows initalized verts on image & mask
         trans_verts = translations_init + torch.matmul(vertices,
                                                        rotations_init)
@@ -569,10 +596,8 @@ def find_optimal_pose(
             plt.clf()
             fig, axes = plt.subplots(1, 3)
             ax = axes[0]
-            ax.imshow(image)
             ax.scatter(flat_verts[:, 0], flat_verts[:, 1], s=1, alpha=0.2)
             ax = axes[1]
-            ax.imshow(image)
             for vert in proj_verts:
                 ax.scatter(vert[:, 0], vert[:, 1], s=1, alpha=0.2)
             ax = axes[2]
@@ -588,10 +613,10 @@ def find_optimal_pose(
         if viz:
             fig, axes = plt.subplots(1, 3)
             ax = axes[0]
-            ax.imshow(mask)
+            ax.imshow(mask_viz)
             ax.scatter(flat_verts[:, 0], flat_verts[:, 1], s=1, alpha=0.2)
             ax = axes[1]
-            ax.imshow(mask)
+            ax.imshow(mask_viz)
             for vert in proj_verts:
                 ax.scatter(vert[:, 0], vert[:, 1], s=1, alpha=0.2)
             ax = axes[2]
@@ -607,11 +632,12 @@ def find_optimal_pose(
         ref_image=mask,
         vertices=vertices,
         faces=faces,
-        textures=textures,
         rotation_init=matrix_to_rot6d(rotations_init),
         translation_init=translations_init,
         num_initializations=num_initializations,
-        K=camintr_bbox,
+        camera_K=camintr_bbox,
+        base_rotation=base_rotation,
+        base_translation=base_translation
     )
     # model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -622,7 +648,7 @@ def find_optimal_pose(
             debug_viz_folder = os.path.join(viz_folder, "poseoptim")
             os.makedirs(debug_viz_folder, exist_ok=True)
             imagify.viz_imgrow(
-                sil, overlays=[mask,]*len(sil), viz_nb=4, 
+                sil, overlays=[mask_viz,]*len(sil), viz_nb=4,
                 path=os.path.join(debug_viz_folder, f"{step:04d}.png"))
 
         losses = sum(loss_dict.values())
