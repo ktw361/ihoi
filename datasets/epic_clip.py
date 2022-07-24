@@ -130,6 +130,8 @@ class EpicClipDataset(Dataset):
         info = self.data_infos[index]
         vid, cat, side, start, end = \
             info.vid, info.cat, info.side, info.start, info.end
+        if end - start > 100:
+            raise NotImplementedError(f"frames more than 100 : {end - start}.")
         images = []
         hand_bbox_dicts = []
         obj_bbox_arrs = []

@@ -16,6 +16,8 @@ import torchvision.utils as vutils
 from PIL import Image
 from IPython import display
 
+from libzhifan.odlib import xyxy_to_xywh, xywh_to_xyxy
+
 
 def mask_to_bbox(mask, mode='minmax', rate=1):
     """
@@ -141,6 +143,14 @@ def jitter_bbox(bbox, s_stdev, t_stdev):
 
 
 def square_bbox(bbox, pad=0):
+    """ 
+    Args:
+        bbox: xyxy 
+        pad: pad ratio
+
+    Returns:
+        bbox: xyxy
+    """
     if not torch.is_tensor(bbox):
         is_numpy = True
         bbox = torch.FloatTensor(bbox)
@@ -155,6 +165,14 @@ def square_bbox(bbox, pad=0):
     if is_numpy:
         bbox = bbox.cpu().detach().numpy()
     return bbox
+
+
+def square_bbox_xywh(bbox, pad_ratio=0.0):
+    obj_bbox_xyxy = xywh_to_xyxy(bbox)
+    obj_bbox_squared_xyxy = square_bbox(
+        obj_bbox_xyxy, pad_ratio)
+    obj_bbox_squared = xyxy_to_xywh(obj_bbox_squared_xyxy)
+    return obj_bbox_squared
 
 
 def crop_cam_intr(cam_intr, bbox_sq, H):

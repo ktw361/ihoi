@@ -1,8 +1,9 @@
 from typing import List
 import numpy as np
+import torch
 
 
-def cluster_distance_matrix(d: np.ndarray, K: int) -> List:
+def cluster_distance_matrix(d: torch.Tensor, K: int) -> List:
     """ Clustering based on a distance matrix. 
 
     Steps:
@@ -17,6 +18,7 @@ def cluster_distance_matrix(d: np.ndarray, K: int) -> List:
         center_indices: length K list, index of cluster centers.
         clusters: length K list, each contains the index of this group members.
     """
+    d = d.clone().cpu().numpy()
     N = len(d)
     num_subgraph = N
 

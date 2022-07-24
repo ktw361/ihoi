@@ -37,33 +37,61 @@ class PoseRenderer(nn.Module):
                  ref_image,
                  vertices,
                  faces,
-                 textures,
                  rotation_init,
                  translation_init,
                  num_initializations=1,
+                 base_rotation=None,
+                 base_translation=None,
                  kernel_size=7,
-                 K=None,
+                 camera_K=None,
                  power=0.25,
                  lw_chamfer=0,
                  device='cuda'):
         """ 
+        For B `images`, `base transformations`, `camera_K`
+        find N_init `rotations` and `translations`
+        for single object.
+        
         Args:
-            K: local camera of the object
+            ref_image: (B, W, W) torch.Tensor float32
+            vertices: (V, 3)
+            faces: (F, 3)
+            rotation_init: (N_init, 3, 3)
+            translation_init: (1, 3)
+            base_rotation: (B, 3, 3)
+            base_translation:  (B, 3)
+            K: (B, 3, 3)
+                local camera of the object
 
         """
-        assert ref_image.shape[0] == ref_image.shape[1], "Must be square."
+        assert ref_image.shape[-1] == ref_image.shape[-2], "Must be square."
         super().__init__()
+        dtype = vertices.dtype
+        device = vertices.device
 
         vertices = torch.as_tensor(vertices, device=device)
         faces = torch.as_tensor(faces, device=device)
+        textures = torch.ones(faces.shape[0], 1, 1, 1, 3,
+                            dtype=torch.float32, device=device)
         self.register_buffer("vertices", vertices)
         self.register_buffer("faces", faces.repeat(num_initializations, 1, 1))
         self.register_buffer("textures", textures)
+        if base_rotation is None:
+            base_rotation = torch.eye(
+                3, dtype=dtype, device=device).unsqueeze_(0)
+        else:
+            base_rotation = base_rotation.clone()
+        if base_translation is None:
+            base_translation = torch.zeros([1, 3], dtype=dtype, device=device)
+        else:
+            base_translation = base_translation.clone()
+        self.register_buffer('base_rotation', base_rotation)
+        self.register_buffer('base_translation', base_translation)
 
         # Load reference mask.
         # Convention for silhouette-aware loss: -1=occlusion, 0=bg, 1=fg.
-        image_ref = torch.from_numpy((ref_image > 0).astype(np.float32))
-        keep_mask = torch.from_numpy((ref_image >= 0).astype(np.float32))
+        image_ref = (ref_image > 0).float()  # (B, H, H)
+        keep_mask = (ref_image >= 0).float()
         self.register_buffer("image_ref", image_ref)
         self.register_buffer("keep_mask", keep_mask)
         self.pool = torch.nn.MaxPool2d(kernel_size=kernel_size,
@@ -76,25 +104,26 @@ class PoseRenderer(nn.Module):
                 num_initializations, 1, 1)
         self.translations = nn.Parameter(translation_init.clone().float(),
                                          requires_grad=True)
-        mask_edge = self.compute_edges(image_ref.unsqueeze(0)).cpu().numpy()
+        mask_edge = self.compute_edges(image_ref).cpu().numpy()
         edt = distance_transform_edt(1 - (mask_edge > 0))**(power * 2)
         self.register_buffer(
             "edt_ref_edge", torch.from_numpy(edt))
         # Setup renderer.
-        if K is None:
-            K = torch.FloatTensor([[[1, 0, 0.5], [0, 1, 0.5], [0, 0, 1]]]).to(device)
+        if camera_K is None:
+            camera_K = torch.FloatTensor([
+                [[1, 0, 0.5], [0, 1, 0.5], [0, 0, 1]]]).to(device)
         rot = torch.eye(3).unsqueeze(0).to(device)
         trans = torch.zeros(1, 3).to(device)
         self.renderer = nr.renderer.Renderer(
-            image_size=ref_image.shape[0],
-            K=K,
+            image_size=ref_image.shape[-1],
+            K=camera_K,
             R=rot,  # eye(3)
             t=trans,  # zero
             orig_size=1,
             anti_aliasing=False,
         )
         self.lw_chamfer = lw_chamfer
-        self.K = K
+        self.K = camera_K
 
         self.to(device)
 
@@ -107,9 +136,14 @@ class PoseRenderer(nn.Module):
     def apply_transformation(self):
         """
         Applies current rotation and translation to vertices.
+
+        V_out = (V_model @ R_base + T_base) @ R + T
+
+        Out shape: (N_init, V, 3)
         """
-        rots = self.rotations_matrix
-        return torch.matmul(self.vertices, rots) + self.translations
+        rots = self.base_rotation @ self.rotations_matrix
+        transl = self.base_translation @ self.rotations_matrix + self.translations
+        return torch.matmul(self.vertices, rots) + transl
 
     def compute_offscreen_loss(self, verts):
         """
@@ -135,7 +169,7 @@ class PoseRenderer(nn.Module):
         too_far = torch.max(coord_z - self.renderer.far, zeros).sum(dim=(1, 2))
         return lower_right + upper_left + behind + too_far
 
-    def compute_edges(self, silhouette):
+    def compute_edges(self, silhouette: torch.Tensor) -> torch.Tensor:
         return self.pool(silhouette) - silhouette
 
     def forward(self):
@@ -175,10 +209,10 @@ class PoseRenderer(nn.Module):
         _attr = f'_clustered_results_{K}'
         if hasattr(self, _attr):
             return getattr(self, _attr)
-        verts_orig = self.vertices  # .cpu().numpy()
+        verts_orig = self.vertices
         fitted_results = self.fitted_results
-        rots = fitted_results.rotations  # .detach().cpu().numpy()
-        distance_matrix = compute_pairwise_dist(verts_orig, rots, verbose=True).cpu().numpy()
+        rots = fitted_results.rotations
+        distance_matrix = compute_pairwise_dist(verts_orig, rots, verbose=True)
         center_indices, clusters = cluster_distance_matrix(distance_matrix, K=K)
         def indexing(obj, l):
             if isinstance(obj, dict):
@@ -197,9 +231,11 @@ class PoseRenderer(nn.Module):
     def render(self) -> np.ndarray:
         """
         Renders objects according to current rotation and translation.
+
+        Returns:
+            images: ndarray (N_init, W, W)
         """
         verts = self.apply_transformation()
-        # images = self.renderer(verts, self.faces, torch.tanh(self.textures))[0]
         images = self.renderer(verts, self.faces, mode='silhouettes')
         images = images.detach().cpu().numpy()
         return images
