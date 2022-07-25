@@ -4,26 +4,14 @@ from PIL import Image
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-
-from datasets.epic_lib.epic_utils import read_epic_image
+from datasets.epic_lib.epic_utils import (
+    read_epic_image, read_mask_with_occlusion)
 from datasets.epic_lib import epichoa
 
 
 """ Epic-Kitchens Inference Dataset """
 
 HAND_MASK_KEEP_EXPAND = 0.2
-
-epic_cats = [
-    '_bg',
-    'left hand',
-    'right hand',
-    'can',
-    'cup',
-    'plate',
-    'bottle',
-    'mug',
-    'bowl',
-]
 
 
 def row2xywh(row):
@@ -154,37 +142,20 @@ class EpicInference(Dataset):
 
         # masks
         path = f'{self.mask_dir}/{vid}/frame_{frame_idx:010d}.png'
-        mask = Image.open(path).convert('P')
-        mask = mask.resize(self.image_size, Image.NEAREST)
-        mask = np.asarray(mask, dtype=np.float32)
-        mask_hand = np.zeros_like(mask)
-        mask_obj = np.zeros_like(mask)
-        side_name = f"{side} hand"
-        mask_hand[mask == epic_cats.index(side_name)] = 1
-        mask_obj[mask == epic_cats.index(cat)] = 1
-        if self.crop_hand_mask:
-            crop_expand = HAND_MASK_KEEP_EXPAND
-            x0, y0, bw, bh = hand_box
-            x1, y1 = x0 + bw, y0 + bh
-            x0 -= bw * crop_expand / 2
-            y0 -= bh * crop_expand / 2
-            x1 += bw * crop_expand / 2
-            y1 += bh * crop_expand / 2
-            x0, y0, x1, y1 = map(int, (x0, y0, x1, y1))
-            x0 = min(max(0, x0), mask.shape[1])
-            y0 = min(max(0, y0), mask.shape[0])
-            x1 = min(max(0, x1), mask.shape[1])
-            y1 = min(max(0, y1), mask.shape[0])
-            mask_hand_crop = np.zeros_like(mask_hand)
-            mask_hand_crop[y0:y1, x0:x1] = mask_hand[y0:y1, x0:x1]
-            mask_hand = mask_hand_crop
+        mask_hand, mask_obj = read_mask_with_occlusion(
+            path, 
+            out_size=self.image_size, side=side, cat=cat, 
+            crop_hand_mask=self.crop_hand_mask, 
+            crop_hand_expand=HAND_MASK_KEEP_EXPAND,
+            hand_box=hand_box)
 
         side = f"{side}_hand"
         obj_bbox_ten = torch.as_tensor(obj_bbox_arr)
         mask_hand = torch.as_tensor(mask_hand)
         mask_obj = torch.as_tensor(mask_obj)
 
-        return image, hand_bbox_dict, side, obj_bbox_ten, mask_hand, mask_obj, cat
+        return image, hand_bbox_dict, side, obj_bbox_ten, \
+            mask_hand, mask_obj, cat
     
 
 if __name__ == '__main__':
