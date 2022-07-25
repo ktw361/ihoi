@@ -1,10 +1,22 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 from pathlib import Path
+from typing import Tuple
 from PIL import Image
 import numpy as np
 
-from . import epichoa
+
+EPIC_CATS = [
+    '_bg',
+    'left hand',
+    'right hand',
+    'can',
+    'cup',
+    'plate',
+    'bottle',
+    'mug',
+    'bowl',
+]
 
 
 def read_epic_image(video_id, 
@@ -32,6 +44,61 @@ def read_epic_image_old(video_id,
     if as_pil:
         return frame
     return np.asarray(frame)
+
+
+def read_mask_with_occlusion(path: str,
+                             out_size: Tuple,
+                             side: str,
+                             cat: str,
+                             crop_hand_mask=False,
+                             crop_hand_expand=0.0,
+                             hand_box: np.ndarray = None):
+    """
+    Args:
+        path: <path_to_frame_xxx.png>
+        out_size: output mask size [W, H]
+        side: hand side, 'left' or 'right'
+        cat: object category
+        crop_hand_mask: whether to crop hand mask to hand_box region
+        crop_hand_expand: expand ratio
+        hand_box: (4,)
+    
+    Returns:
+        mask_hand, mask_obj: np.ndarray (H, W) int32
+            1 fg, -1 ignore, 0 bg
+    """
+    mask = Image.open(path).convert('P')
+    mask = mask.resize(out_size, Image.NEAREST)
+    # mask = np.asarray(mask, dtype=np.float32)
+    mask = np.asarray(mask, dtype=np.int32)
+    mask_hand = np.zeros_like(mask)
+    mask_obj = np.zeros_like(mask)
+    if 'left' in side:
+        side_name = "left hand"
+    elif 'right' in side:
+        side_name = "right hand"
+    else:
+        raise ValueError
+    mask_hand[mask == EPIC_CATS.index(side_name)] = 1
+    mask_obj[mask == EPIC_CATS.index(cat)] = 1
+    if crop_hand_mask:
+        x0, y0, bw, bh = hand_box
+        x1, y1 = x0 + bw, y0 + bh
+        x0 -= bw * crop_hand_expand / 2
+        y0 -= bh * crop_hand_expand / 2
+        x1 += bw * crop_hand_expand / 2
+        y1 += bh * crop_hand_expand / 2
+        x0, y0, x1, y1 = map(int, (x0, y0, x1, y1))
+        x0 = min(max(0, x0), mask.shape[1])
+        y0 = min(max(0, y0), mask.shape[0])
+        x1 = min(max(0, x1), mask.shape[1])
+        y1 = min(max(0, y1), mask.shape[0])
+        mask_hand_crop = np.zeros_like(mask_hand)
+        mask_hand_crop[y0:y1, x0:x1] = mask_hand[y0:y1, x0:x1]
+        mask_hand = mask_hand_crop
+    # This has to happen after cropping
+    mask_obj[mask_hand == 1] = -1
+    return mask_hand, mask_obj
 
 
 """ Hoa """

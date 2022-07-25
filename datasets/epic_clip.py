@@ -7,7 +7,8 @@ from PIL import Image
 
 from torch.utils.data import Dataset
 
-from datasets.epic_lib.epic_utils import read_epic_image
+from datasets.epic_lib.epic_utils import (
+    read_epic_image, read_mask_with_occlusion)
 
 
 HAND_MASK_KEEP_EXPAND = 0.2
