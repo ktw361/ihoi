@@ -19,10 +19,7 @@ from obj_pose.pose_renderer import PoseRenderer, REND_SIZE
 from libzhifan.geometry import (
     SimpleMesh, CameraManager, projection
 )
-from libzhifan.odlib import xyxy_to_xywh, xywh_to_xyxy
-
 from libyana.camutils import project
-from libyana.conversions import npt
 from libyana.lib3d import kcrop
 from libyana.visutils import imagify
 
@@ -312,11 +309,11 @@ class PoseOptimizer:
                     coor_sys='nr',
                     in_ndc=False
                 ),
-                image=np.uint8(self._image_patch*256),
+                image=np.uint8(self._image_patch),
             )
             return img
         elif kind == 'none':
-            return np.uint8(self._image_patch*256)
+            return np.uint8(self._image_patch)
         else:
             raise ValueError(f"kind {kind} not unserstood")
 
@@ -366,7 +363,7 @@ class PoseOptimizer:
         if orig_dim == 2:
             image = image.unsqueeze(0)
 
-        x, y, w, h = box
+        x, y, w, h = box.clone()  # or call item() to avoid pointer
         img_h, img_w = image.shape[:2]
         pad_x = max(max(-x ,0), max(x+w-img_w, 0))
         pad_y = max(max(-y ,0), max(y+h-img_h, 0))
@@ -384,7 +381,6 @@ class PoseOptimizer:
         img_crop = crop_tensor[0]
         if orig_dim == 2:
             img_crop = img_crop[0]
-        # img_crop = crop_tensor.permute(0, 2, 3, 1)
         return img_crop
 
     def finalize_without_fit(self,
@@ -403,7 +399,7 @@ class PoseOptimizer:
             obj_mask_patch: torch.Tensor (h, w)
         """
         obj_bbox_squared = image_utils.square_bbox_xywh(
-            obj_bbox).int()
+            obj_bbox, self.ihoi_box_expand).int()
         obj_mask_patch = self.pad_and_crop(
             object_mask, obj_bbox_squared, self.rend_size)
 
