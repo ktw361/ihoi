@@ -5,10 +5,10 @@ import os.path as osp
 
 import numpy as np
 import torch
-from datasets.epic_clip import EpicClipDataset, CachedEpicClipDataset
+from datasets.epic_clip import EpicClipDataset
 from homan.ho_forwarder import HOForwarder
 from nnutils.hand_utils import ManopthWrapper
-from nnutils.handmocap import get_handmocap_predictor
+from nnutils.handmocap import get_handmocap_predictor, collate_mocap_hand
 from nnutils import image_utils
 
 from obj_pose.pose_optimizer import PoseOptimizer, SavedContext
@@ -251,22 +251,28 @@ def main(args):
     else:
         raise ValueError
 
+    """ Process all hands """
+    mocap_predictions = []
+    for img, hand_dict in zip(images, hand_bbox_dicts):
+        mocap_pred = hand_predictor.regress(
+            img[..., ::-1], [hand_dict]
+        )
+        mocap_predictions += mocap_pred
+    one_hands = collate_mocap_hand(mocap_predictions, side)
+
     """ Process key-frame """
     gt_frame, start, end = info.gt_frame, info.start, info.end
     assert gt_frame >= start
     # t = gt_frame - start
     t = 0
-    mocap_predictions = hand_predictor.regress(
-        images[t, ..., ::-1], [hand_bbox_dicts[t]]
-    )
 
-    one_hand = mocap_predictions[0][side]
     pose_machine = PoseOptimizer(
-        one_hand, obj_loader, hand_wrapper_flat,
+        one_hands, obj_loader, hand_wrapper_flat,
         device=device,
     )
     pose_machine.fit_obj_pose(
-        images[t], obj_bboxes[t], obj_masks[t], cat,
+        images, obj_bboxes, obj_masks, cat,
+        put_hand_transform=True,
         num_initializations=400, num_iterations=50,
         sort_best=False, debug=False, viz=False
     )
@@ -274,6 +280,7 @@ def main(args):
     K = 10
     obj_pose_results = pose_machine.pose_model.clustered_results(K=K)
 
+    return
     T = end - start + 1
     homan = np.empty((T, K), dtype=object)  # Lattice
     for k in range(K):

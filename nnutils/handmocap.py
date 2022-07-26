@@ -129,7 +129,7 @@ def collate_mocap_hand(mocap_predictions: list,
             ]
     
     Returns:
-        mocap_hand: dict of selected fields.
+        mocap_hand: dict with key in `fields`.
     """
     one_hand = dict()
     for key in fields:
