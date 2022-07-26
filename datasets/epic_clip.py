@@ -3,7 +3,7 @@ import pickle
 import json
 import os.path as osp
 import numpy as np
-from PIL import Image
+import torch
 
 from torch.utils.data import Dataset
 
@@ -138,7 +138,7 @@ class EpicClipDataset(Dataset):
         obj_bbox_arrs = []
         object_masks = []
         hand_masks = []
-        for frame_idx in range(start, end+1):
+        for frame_idx in range(start, end+1)[:2]:
             image = read_epic_image(
                 vid, frame_idx, as_pil=True)
             image = image.resize(self.image_size)
@@ -157,30 +157,12 @@ class EpicClipDataset(Dataset):
 
             # masks
             path = f'{self.mask_dir}/{vid}/frame_{frame_idx:010d}.png'
-            mask = Image.open(path).convert('P')
-            mask = mask.resize(self.image_size, Image.NEAREST)
-            mask = np.asarray(mask, dtype=np.float32)
-            mask_hand = np.zeros_like(mask)
-            mask_obj = np.zeros_like(mask)
-            side_name = f"{side} hand"
-            mask_hand[mask == epic_cats.index(side_name)] = 1
-            mask_obj[mask == epic_cats.index(cat)] = 1
-            if self.crop_hand_mask:
-                crop_expand = HAND_MASK_KEEP_EXPAND
-                x0, y0, bw, bh = hand_box
-                x1, y1 = x0 + bw, y0 + bh
-                x0 -= bw * crop_expand / 2
-                y0 -= bh * crop_expand / 2
-                x1 += bw * crop_expand / 2
-                y1 += bh * crop_expand / 2
-                x0, y0, x1, y1 = map(int, (x0, y0, x1, y1))
-                x0 = min(max(0, x0), mask.shape[1])
-                y0 = min(max(0, y0), mask.shape[0])
-                x1 = min(max(0, x1), mask.shape[1])
-                y1 = min(max(0, y1), mask.shape[0])
-                mask_hand_crop = np.zeros_like(mask_hand)
-                mask_hand_crop[y0:y1, x0:x1] = mask_hand[y0:y1, x0:x1]
-                mask_hand = mask_hand_crop
+            mask_hand, mask_obj = read_mask_with_occlusion(
+                path, 
+                out_size=self.image_size, side=side, cat=cat, 
+                crop_hand_mask=self.crop_hand_mask, 
+                crop_hand_expand=HAND_MASK_KEEP_EXPAND,
+                hand_box=hand_box)
 
             images.append(image)
             hand_bbox_dicts.append(hand_bbox_dict)
@@ -190,9 +172,9 @@ class EpicClipDataset(Dataset):
 
         side_return = f"{side}_hand"
         images = np.stack(images)
-        obj_bbox_arrs = np.stack(obj_bbox_arrs)
-        hand_masks = np.stack(hand_masks)
-        object_masks = np.stack(object_masks)
+        obj_bbox_arrs = torch.as_tensor(obj_bbox_arrs)
+        hand_masks = torch.as_tensor(hand_masks)
+        object_masks = torch.as_tensor(object_masks)
 
         return images, hand_bbox_dicts, side_return, obj_bbox_arrs, hand_masks, object_masks, cat
 

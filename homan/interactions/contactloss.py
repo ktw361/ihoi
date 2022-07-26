@@ -26,7 +26,7 @@ def thresh_ious(gt_dists, pred_dists, thresh):
     gt_contacts = gt_dists <= thresh
     pred_contacts = pred_dists <= thresh
     inter = (gt_contacts * pred_contacts).sum(1).float()
-    union = union = (gt_contacts | pred_contacts).sum(1).float()
+    union = (gt_contacts | pred_contacts).sum(1).float()
     iou = torch.zeros_like(union)
     iou[union != 0] = inter[union != 0] / union[union != 0]
     return iou

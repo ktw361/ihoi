@@ -383,7 +383,7 @@ def squre_mask(xy_center, radius, out_size):
     :param H:
     :return:
     """
-    H = W = out_size
+    H, W = out_size, out_size
     device = xy_center.device
     N = xy_center.size(0)
 

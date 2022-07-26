@@ -21,8 +21,7 @@ from libyana.conversions import npt
 """ A re-implemented version of homan_core.py
 
 Translation is inheritly related to scale.
-if Y = RX + T, then sY = sRX + sT,
-in other word
+if Y = RX + T, then sY = sRX + sT.
 """
 
 class HOForwarder(nn.Module):
@@ -417,7 +416,7 @@ class HOForwarder(nn.Module):
                               viewpoint=viewpoint)
 
     def render_summary(self) -> np.ndarray:
-        a1 = np.uint8(self.ihoi_img_patch*255)
+        a1 = np.uint8(self.ihoi_img_patch)
         mask_obj = self.ref_mask_object.cpu().numpy().squeeze()
         mask_hand = self.ref_mask_hand.cpu().numpy().squeeze()
         all_mask = np.zeros_like(a1, dtype=np.float32)
@@ -445,7 +444,7 @@ class HOForwarder(nn.Module):
                 coor_sys='nr',
                 in_ndc=False
             ),
-            image=self.ihoi_img_patch*256,
+            image=self.ihoi_img_patch,
         )
         return img
 
@@ -487,61 +486,3 @@ class HOForwarder(nn.Module):
             )
         )
         return np.hstack([front, left, back])
-    
-    @staticmethod
-    def pack_homan_kwargs(context, sel_idx, obj_pose_results):
-        """
-        Args:
-            sel: index into iou array
-            
-        Returns:
-            a dict containing kwargs to initialize this class (HoForwarder)
-        """
-        pose_machine = context.pose_machine
-        obj_bbox = context.obj_bbox
-        mask_hand = context.mask_hand
-        mask_obj = context.mask_obj
-        hand_side = context.hand_side
-
-        pose_idx = sel_idx
-        pose_idx = int(pose_idx)
-
-        _, target_masks_object, target_masks_hand = pose_machine._get_bbox_and_crop(
-            mask_obj, mask_hand, obj_bbox)  # from global to local
-        mano_pca_pose = pose_machine.recover_pca_pose()
-        mano_rot = torch.zeros([1, 3], device=mano_pca_pose.device)
-        mano_trans = torch.zeros([1, 3], device=mano_pca_pose.device)
-        camintr = pose_machine.pose_model.K  # could be pose_machine.ihoi_cam
-
-        homan_kwargs = dict(
-            translations_object = obj_pose_results.translations[[pose_idx]],
-            rotations_object = obj_pose_results.rotations[[pose_idx]],
-            verts_object_og = pose_machine.pose_model.vertices,
-            faces_object = pose_machine.pose_model.faces[[pose_idx]],
-            translations_hand = pose_machine.hand_translation,
-            rotations_hand = pose_machine.hand_rotation,
-            verts_hand_og = pose_machine.hand_verts,
-            hand_sides = [hand_side],
-            mano_trans = mano_trans,
-            mano_rot = mano_rot,
-            mano_betas = pose_machine.pred_hand_betas,
-            mano_pca_pose = pose_machine.recover_pca_pose(),
-            faces_hand = pose_machine.hand_faces,
-            
-            scale_object = 1.5,
-            # scale_object = 0.7675090432167053,  # 1.5, 
-            scale_hand = 1.0,
-
-            camintr = camintr,
-            target_masks_hand = torch.as_tensor(target_masks_hand),
-            target_masks_object = torch.as_tensor(target_masks_object),
-
-            image_size = pose_machine.rend_size,
-            ihoi_img_patch=pose_machine._image_patch
-            )
-
-        for k, v in homan_kwargs.items():
-            if hasattr(v, 'device'):
-                homan_kwargs[k] = v.to('cuda')
-
-        return homan_kwargs
