@@ -34,7 +34,7 @@ def row2xywh(row):
 class EpicInference(Dataset):
 
     def __init__(self,
-                 image_sets='/home/skynet/Zhifan/data/epic_analysis/interpolation',
+                 image_sets,
                  epic_root='/home/skynet/Zhifan/datasets/epic',
                  mask_dir='/home/skynet/Zhifan/data/epic_analysis/interpolation',
                  image_size=(1280, 720), # (640, 360),
@@ -53,7 +53,7 @@ class EpicInference(Dataset):
                 inside hand_bbox.
         """
         super(EpicInference, self).__init__(*args, **kwargs)
-        self.epic_rgb_root = osp.join(epic_root, 'rgb_root')
+        self.epic_rgb_root = '/home/skynet/Zhifan/data/epic_analysis/visor_frames/'
         self.mask_dir = mask_dir
         self.hoa_root = osp.join(epic_root, 'hoa')
         self.image_size = image_size
