@@ -237,9 +237,13 @@ class PoseOptimizer:
 
         hand_h, hand_w, _, _ = torch.split(hand_bbox_proc, [1, 1, 1, 1], dim=1)
         hand_cam = self._hand_cam_from_bbox(hand_bbox_proc)
+        print(hand_cam)
+        tmp = hand_cam.resize(hand_h, hand_w)
+        print(tmp)
         global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
             hand_bbox_proc, self.FULL_HEIGHT, self.FULL_WIDTH
         )
+        print(global_cam)
         return v_orig, v_transformed, hand_cam, global_cam
 
     def _hand_cam_from_bbox(self, hand_bbox) -> BatchCameraManager:
@@ -256,6 +260,8 @@ class PoseOptimizer:
         fy = torch.ones_like(box_w) * fx
         cx = torch.zeros_like(box_w)
         cy = torch.zeros_like(box_w)
+        hand_crop_h = torch.ones_like(box_w) * hand_crop_h
+        hand_crop_w = torch.ones_like(box_w) * hand_crop_w
         hand_cam = BatchCameraManager(
             fx=fx, fy=fy, cx=cx, cy=cy, img_h=box_h, img_w=box_w,
             in_ndc=True
