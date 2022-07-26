@@ -236,6 +236,8 @@ class PoseOptimizer:
         v_transformed = cTh.transform_points(v_orig)
 
         _, _, hand_h, hand_w = torch.split(hand_bbox_proc, [1, 1, 1, 1], dim=1)
+        hand_h = hand_h.view(-1)
+        hand_w = hand_w.view(-1)
         hand_cam = self._hand_cam_from_bbox(hand_bbox_proc)
         global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
             hand_bbox_proc, self.FULL_HEIGHT, self.FULL_WIDTH
@@ -252,6 +254,8 @@ class PoseOptimizer:
         hand_crop_w = 224
         fx = self.WEAK_CAM_FX
         _, _, box_w, box_h = torch.split(hand_bbox, [1, 1, 1, 1], dim=1)
+        box_h = box_h.view(-1)
+        box_w = box_w.view(-1)
         fx = torch.ones_like(box_w) * fx
         fy = torch.ones_like(box_w) * fx
         cx = torch.zeros_like(box_w)
