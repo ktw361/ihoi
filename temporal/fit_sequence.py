@@ -9,6 +9,7 @@ from datasets.epic_clip import EpicClipDataset, CachedEpicClipDataset
 from homan.ho_forwarder import HOForwarder
 from nnutils.hand_utils import ManopthWrapper
 from nnutils.handmocap import get_handmocap_predictor
+from nnutils import image_utils
 
 from obj_pose.pose_optimizer import PoseOptimizer, SavedContext
 from obj_pose.obj_loader import OBJLoader
@@ -41,8 +42,12 @@ def init_ho_forwarder(pose_machine,
                       obj_pose_results,
                       hand_side,
                       pose_idx) -> HOForwarder:
-    _, target_masks_object, target_masks_hand = pose_machine._get_bbox_and_crop(
-        mask_obj, mask_hand, obj_bbox)  # from global to local
+    obj_bbox_squared = image_utils.square_bbox_xywh(
+        obj_bbox, pose_machine.ihoi_box_expand).int()
+    obj_mask_patch = pose_machine.pad_and_crop(
+        mask_obj, obj_bbox_squared, pose_machine.rend_size)
+    hand_mask_patch = pose_machine.pad_and_crop(
+        mask_hand, obj_bbox_squared, pose_machine.rend_size)
     mano_pca_pose = pose_machine.recover_pca_pose()
     mano_rot = torch.zeros([1, 3], device=mano_pca_pose.device)
     mano_trans = torch.zeros([1, 3], device=mano_pca_pose.device)
@@ -67,8 +72,8 @@ def init_ho_forwarder(pose_machine,
         scale_hand = 1.0,
 
         camintr = camintr,
-        target_masks_hand = torch.as_tensor(target_masks_hand),
-        target_masks_object = torch.as_tensor(target_masks_object),
+        target_masks_hand = obj_mask_patch,
+        target_masks_object = hand_mask_patch,
 
         image_size = pose_machine.rend_size,
         ihoi_img_patch=pose_machine._image_patch
@@ -227,7 +232,7 @@ def optimize_temporal(homan,
 
 def main(args):
 
-    dataset = CachedEpicClipDataset(
+    dataset = EpicClipDataset(
         image_sets=args.image_sets)
 
     device = 'cuda'
@@ -249,7 +254,8 @@ def main(args):
     """ Process key-frame """
     gt_frame, start, end = info.gt_frame, info.start, info.end
     assert gt_frame >= start
-    t = gt_frame - start
+    # t = gt_frame - start
+    t = 0
     mocap_predictions = hand_predictor.regress(
         images[t, ..., ::-1], [hand_bbox_dicts[t]]
     )

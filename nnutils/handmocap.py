@@ -102,6 +102,48 @@ def process_mocap_predictions(mocap_predictions, image, hand_wrapper=None, mask=
     return data
 
 
+def collate_mocap_hand(mocap_predictions: list,
+                       side: str,
+                       fields=('pred_hand_pose', 'pred_hand_betas',
+                               'pred_camera', 'bbox_processed')
+                       ) -> dict:
+    """
+    mocap shapes:
+        pred_vertices_smpl (778, 3)
+        pred_joints_smpl (21, 3)
+        faces (1538, 3)
+        bbox_scale_ratio ()
+        bbox_top_left (2,)
+        bbox_processed (4,)
+        pred_camera (3,)
+        img_cropped (224, 224, 3)
+        pred_hand_pose (1, 48)
+        pred_hand_betas (1, 10)
+        pred_vertices_img (778, 3)
+        pred_joints_img (21, 3)
+    
+    Args:
+        mocap_predictions: list of [
+            dict('left_hand': dict
+                 'right_hand': dict) 
+            ]
+    
+    Returns:
+        mocap_hand: dict of selected fields.
+    """
+    one_hand = dict()
+    for key in fields:
+        content = []
+        for mocap_pred in mocap_predictions:
+            elem = torch.as_tensor(mocap_pred[side][key])
+            if key != 'pred_hand_pose' and key != 'pred_hand_betas':
+                elem = elem.unsqueeze(0)
+            content.append(elem)
+        content = torch.cat(content, dim=0)
+        one_hand[key] = content
+    return one_hand
+
+
 def get_handmocap_detector(view_type='ego_centric'):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     bbox_detector =  HandBboxDetector(view_type, device)

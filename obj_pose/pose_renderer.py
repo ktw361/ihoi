@@ -177,7 +177,7 @@ class PoseRenderer(nn.Module):
         image = self.keep_mask * self.renderer(
             verts, self.faces, mode="silhouettes")
         loss_dict = {}
-        loss_dict["mask"] = torch.sum((image - self.image_ref)**2, dim=(1, 2))
+        loss_dict["mask"] = torch.sum((image - self.image_ref)**2, dim=(1, 2))  # TODO(zhifan): sum or mean
         with torch.no_grad():
             iou = ioumetrics.batch_mask_iou(image.detach(),
                                             self.image_ref.detach())
@@ -186,7 +186,6 @@ class PoseRenderer(nn.Module):
         loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(verts)
         return loss_dict, iou, image
     
-    # @cached_property
     @property
     def fitted_results(self):
         """ At test-time, one should call self.fitted_results
