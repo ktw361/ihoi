@@ -235,15 +235,11 @@ class PoseOptimizer:
         cTh = Transform3d(matrix=cTh.transpose(1, 2))
         v_transformed = cTh.transform_points(v_orig)
 
-        hand_h, hand_w, _, _ = torch.split(hand_bbox_proc, [1, 1, 1, 1], dim=1)
+        _, _, hand_h, hand_w = torch.split(hand_bbox_proc, [1, 1, 1, 1], dim=1)
         hand_cam = self._hand_cam_from_bbox(hand_bbox_proc)
-        print(hand_cam)
-        tmp = hand_cam.resize(hand_h, hand_w)
-        print(tmp)
         global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
             hand_bbox_proc, self.FULL_HEIGHT, self.FULL_WIDTH
         )
-        print(global_cam)
         return v_orig, v_transformed, hand_cam, global_cam
 
     def _hand_cam_from_bbox(self, hand_bbox) -> BatchCameraManager:
@@ -426,8 +422,10 @@ class PoseOptimizer:
         """ Apply the side effect """
         self._image_patch = image_patch
         self._full_image = image
-        self.ihoi_cam = global_cam.crop_and_resize(
-            obj_bbox_squared, self.rend_size)
+        ihoi_h = torch.ones([bsize]) * self.rend_size
+        ihoi_w = torch.ones([bsize]) * self.rend_size
+        self.ihoi_cam = global_cam.crop(obj_bbox_squared).resize(
+            ihoi_h, ihoi_w)
 
         return obj_bbox_squared, image_patch, obj_mask_patch
 
