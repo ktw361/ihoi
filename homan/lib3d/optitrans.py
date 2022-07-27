@@ -87,10 +87,10 @@ def TCO_init_from_boxes_zup_autodepth(boxes_2d, model_points_3d, K):
     Args:
         boxes_2d (torch.Tensor): (400, 4), torch.float64
         model_points_3d (torch.Tensor): (400, V, 3), e.g. V=5634, torch.float32
-        K (_type_): _description_
+        K (_type_): (B, 3, 3) _description_
 
     Returns:
-        _type_: _description_
+        translation: torch.Tensor (3,)
     """
     # User in BOP20 challenge
     model_points_3d = npt.tensorify(model_points_3d)
