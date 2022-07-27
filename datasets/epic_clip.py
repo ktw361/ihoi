@@ -138,7 +138,7 @@ class EpicClipDataset(Dataset):
         obj_bbox_arrs = []
         object_masks = []
         hand_masks = []
-        for frame_idx in range(start, end+1)[:2]:
+        for frame_idx in range(start, end+1):
             image = read_epic_image(
                 vid, frame_idx, as_pil=True)
             image = image.resize(self.image_size)
