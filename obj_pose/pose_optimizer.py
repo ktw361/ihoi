@@ -121,6 +121,7 @@ class PoseOptimizer:
 
     @property
     def hand_faces(self):
+        """ always (1, F, 3) """
         return self.hand_wrapper.hand_faces
 
     @property
@@ -144,16 +145,16 @@ class PoseOptimizer:
             return self._fit_model
 
     @property
-    def hand_simplemesh(self):
-        return SimpleMesh(self.hand_verts, self.hand_faces)
-
-    @property
     def hand_rotation(self):
         return self._hand_rotation
 
     @property
     def hand_translation(self):
         return self._hand_translation
+
+    def hand_simplemesh(self, cam_idx: int = 0):
+        return SimpleMesh(
+            self.hand_verts[cam_idx], self.hand_faces[0])
 
     def recover_pca_pose(self):
         """
@@ -269,7 +270,7 @@ class PoseOptimizer:
         return hand_cam
 
     def render_model_output(self,
-                            obj_idx: int,
+                            pose_idx: int,
                             cam_idx: int = 0,
                             kind: str='ihoi',
                             clustered=True,
@@ -283,14 +284,15 @@ class PoseOptimizer:
                 - 'ihoi': render w.r.t image prepared
                     according to process_mocap_predictions()
         """
-        hand_mesh = self.hand_simplemesh
+        hand_mesh = self.hand_simplemesh(cam_idx=cam_idx)
         if clustered:
             verts = self.pose_model.clustered_results(
-                self.NUM_CLUSTERS).verts[obj_idx]
+                self.NUM_CLUSTERS).verts
         else:
-            verts = self.pose_model.fitted_results.verts[obj_idx]
+            verts = self.pose_model.fitted_results.verts
+        verts = verts[cam_idx, pose_idx]
         obj_mesh = SimpleMesh(verts,
-                              self.pose_model.faces[0],
+                              self.pose_model.faces,
                               tex_color='yellow')
         mesh_list = []
         if with_hand:
@@ -327,7 +329,8 @@ class PoseOptimizer:
             raise ValueError(f"kind {kind} not unserstood")
 
     def to_scene(self,
-                 idx: int,
+                 pose_idx: int,
+                 cam_idx: int = 0,
                  clustered=True,
                  show_axis=True) -> trimesh.scene.Scene:
         """
@@ -339,14 +342,15 @@ class PoseOptimizer:
                     according to process_mocap_predictions()
         """
         from libzhifan.geometry import SimpleMesh, visualize_mesh
-        hand_mesh = self.hand_simplemesh
+        hand_mesh = self.hand_simplemesh(cam_idx=cam_idx)
         if clustered:
             verts = self.pose_model.clustered_results(
-                self.NUM_CLUSTERS).verts[idx]
+                self.NUM_CLUSTERS).verts
         else:
-            verts = self.pose_model.fitted_results.verts[idx]
+            verts = self.pose_model.fitted_results.verts
+        verts = verts[cam_idx, pose_idx]
         obj_mesh = SimpleMesh(verts,
-                              self.pose_model.faces[idx],
+                              self.pose_model.faces,
                               tex_color='yellow')
         return visualize_mesh([hand_mesh, obj_mesh],
                               show_axis=show_axis,
@@ -397,7 +401,7 @@ class PoseOptimizer:
             obj_bbox_squared: torch.Tensor (B, 4)
             image_patch: np.ndarray (B, h, w, 3)
             obj_mask_patch: torch.Tensor (B, h, w)
-        
+
         Side Effect:
             self._image_patch: (B, h, w, 3) ndarray
             self._full_image: (B, H, W, 3)
@@ -441,7 +445,7 @@ class PoseOptimizer:
 
                      rotations_init=None,
                      translations_init=None,
-                     num_initializations=400,
+                     num_initializations=200,
                      num_iterations=50,
                      debug=True,
                      sort_best=False,
@@ -534,6 +538,8 @@ def find_optimal_pose(
             The box that matches `mask`
         K_global: torch.Tensor (B, 3, 3), represents the global camera that
             captures the original image.
+        base_rotation: torch.Tensor (B, 3, 3)
+        base_translation: torch.Tensor (B, 3)
 
     Returns:
         A PoseRenderer Object,
@@ -547,6 +553,7 @@ def find_optimal_pose(
             - translations
             - K
     """
+    bsize = bbox.size(0)
     os.makedirs(viz_folder, exist_ok=True)
     device = vertices.device
 
@@ -580,19 +587,27 @@ def find_optimal_pose(
     if base_rotation is None:
         base_rotation = torch.eye(
             3, dtype=rotations_init.dtype, device=device).unsqueeze_(0)
+        base_rotation = base_rotation.repeat(bsize, 1, 1)
     else:
         base_rotation = base_rotation.clone()
     if base_translation is None:
         base_translation = torch.zeros(
-            [1, 3], dtype=rotations_init.dtype, device=device)
+            [bsize, 3], dtype=rotations_init.dtype, device=device)
     else:
         base_translation = base_translation.clone()
 
-    V_rotated = vertices[None] @ base_rotation @ rotations_init
+    V_rotated = torch.matmul(
+            (vertices @ base_rotation).unsqueeze_(1),
+            rotations_init.unsqueeze(0))
     if translations_init is None:
-        translations_init = TCO_init_from_boxes_zup_autodepth(
-            bbox, V_rotated, K_global).unsqueeze(1)
-    translations_init -= base_translation @ rotations_init
+        # Init B trans_init, each has N_init, then take mean of them
+        translations_init = []
+        for i in range(bsize):
+            _translations_init = TCO_init_from_boxes_zup_autodepth(
+                bbox[i], V_rotated[i], K_global[i])
+            _translations_init -= base_translation[i] @ rotations_init
+            translations_init.append(_translations_init)
+    translations_init = sum(translations_init) / len(translations_init)
 
     if debug:
         mask_viz = mask[0]  # select 0-th mask for visualization

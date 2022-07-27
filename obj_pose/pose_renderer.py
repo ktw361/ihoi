@@ -1,3 +1,4 @@
+from gettext import translation
 from typing import NamedTuple
 import numpy as np
 import torch
@@ -17,13 +18,11 @@ REND_SIZE = 256
 
 
 class FitResult(NamedTuple):
-    # All content are already sorted by iou
-    verts: torch.Tensor
-    rotations: torch.Tensor
-    translations: torch.Tensor
+    verts: torch.Tensor  # (B, N)
+    rotations: torch.Tensor  # (N, 3, 3)
+    translations: torch.Tensor  # (N, 3)
     loss_dict: dict
-    iou: torch.Tensor
-    image: torch.Tensor
+    iou: torch.Tensor  # (N)
 
 
 class PoseRenderer(nn.Module):
@@ -47,11 +46,11 @@ class PoseRenderer(nn.Module):
                  power=0.25,
                  lw_chamfer=0,
                  device='cuda'):
-        """ 
+        """
         For B `images`, `base transformations`, `camera_K`
         find N_init `rotations` and `translations`
         for single object.
-        
+
         Args:
             ref_image: (B, W, W) torch.Tensor float32
             vertices: (V, 3)
@@ -68,14 +67,12 @@ class PoseRenderer(nn.Module):
         super().__init__()
         dtype = vertices.dtype
         device = vertices.device
+        self.image_size = ref_image.shape[-1]
 
         vertices = torch.as_tensor(vertices, device=device)
         faces = torch.as_tensor(faces, device=device)
-        textures = torch.ones(faces.shape[0], 1, 1, 1, 3,
-                            dtype=torch.float32, device=device)
         self.register_buffer("vertices", vertices)
-        self.register_buffer("faces", faces.repeat(num_initializations, 1, 1))
-        self.register_buffer("textures", textures)
+        self.register_buffer("faces", faces)
         if base_rotation is None:
             base_rotation = torch.eye(
                 3, dtype=dtype, device=device).unsqueeze_(0)
@@ -116,14 +113,13 @@ class PoseRenderer(nn.Module):
         trans = torch.zeros(1, 3).to(device)
         self.renderer = nr.renderer.Renderer(
             image_size=ref_image.shape[-1],
-            K=camera_K,
             R=rot,  # eye(3)
             t=trans,  # zero
             orig_size=1,
             anti_aliasing=False,
         )
         self.lw_chamfer = lw_chamfer
-        self.K = camera_K
+        self.camera_K = camera_K
 
         self.to(device)
 
@@ -139,26 +135,41 @@ class PoseRenderer(nn.Module):
 
         V_out = (V_model @ R_base + T_base) @ R + T
 
-        Out shape: (N_init, V, 3)
+        Out shape: (B, N_init, V, 3)
         """
-        rots = self.base_rotation @ self.rotations_matrix
-        transl = self.base_translation @ self.rotations_matrix + self.translations
+        rots = self.base_rotation.unsqueeze(1) @ self.rotations_matrix.unsqueeze(0)
+        transl = torch.add(
+                torch.matmul(
+                    self.base_translation.unsqueeze(1).unsqueeze(
+                        1),  # (B, 3) -> (B, 1, 1, 3)
+                    self.rotations_matrix.unsqueeze(0)  # (N, 3, 3) -> (1, N, 3, 3)
+                ),  # (B, N, 1, 3)
+                self.translations.unsqueeze(1).unsqueeze(0)  # (N, 3) -> (1, N, 1, 3)
+            ) # (B, N, 1, 3)
         return torch.matmul(self.vertices, rots) + transl
 
     def compute_offscreen_loss(self, verts):
         """
         Computes loss for offscreen penalty. This is used to prevent the degenerate
         solution of moving the object offscreen to minimize the chamfer loss.
+
+        Args:
+            verts: (B, N, V, 3)
+
+        Returns:
+            loss: (N,)
         """
         # On-screen means coord_xy between [-1, 1] and far > depth > 0
+        b, n = verts.size(0), verts.size(1)
+        batch_K = self.camera_K.unsqueeze(1).repeat(1, n, 1, 1)  # (B, N, 3, 3)
         proj = nr.projection(
-            verts,
-            self.renderer.K,
+            verts.view(b*n, -1, 3),
+            batch_K.view(b*n, 3, 3),
             self.renderer.R,
             self.renderer.t,
             self.renderer.dist_coeffs,
             orig_size=1,
-        )
+        )  # (B*N, ...)
         coord_xy, coord_z = proj[:, :, :2], proj[:, :, 2:]
         zeros = torch.zeros_like(coord_z)
         lower_right = torch.max(coord_xy - 1,
@@ -167,42 +178,46 @@ class PoseRenderer(nn.Module):
                                zeros).sum(dim=(1, 2))  # Amount less than -1
         behind = torch.max(-coord_z, zeros).sum(dim=(1, 2))
         too_far = torch.max(coord_z - self.renderer.far, zeros).sum(dim=(1, 2))
-        return lower_right + upper_left + behind + too_far
+        loss = lower_right + upper_left + behind + too_far  # (B*N)
+        return loss.view(b, n).sum(0)
 
     def compute_edges(self, silhouette: torch.Tensor) -> torch.Tensor:
         return self.pool(silhouette) - silhouette
 
     def forward(self):
         verts = self.apply_transformation()
-        image = self.keep_mask * self.renderer(
-            verts, self.faces, mode="silhouettes")
+        image = self.keep_mask[:, None] * self.render()  # (B, N, W, W)
+        image_ref = self.image_ref[:, None]
+        b, n, w = image.size(0), image.size(1), self.image_size
         loss_dict = {}
-        loss_dict["mask"] = torch.sum((image - self.image_ref)**2, dim=(1, 2))  # TODO(zhifan): sum or mean
+        loss_dict["mask"] = torch.sum(
+            (image - image_ref)**2, dim=(0, 2, 3))  # TODO(zhifan): sum or mean
         with torch.no_grad():
-            iou = ioumetrics.batch_mask_iou(image.detach(),
-                                            self.image_ref.detach())
+            iou = ioumetrics.batch_mask_iou(
+                image.view(b*n, w, w).detach(),
+                image_ref.repeat(1, n, 1, 1).view(b*n, w, w).detach())  # (B*N,)
+            iou = iou.view(b, n).mean(0)  # (N,)
         loss_dict["chamfer"] = self.lw_chamfer * torch.sum(
-            self.compute_edges(image) * self.edt_ref_edge, dim=(1, 2))
+            self.compute_edges(image) * self.edt_ref_edge[:, None], dim=(0, 2, 3))
         loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(verts)
         return loss_dict, iou, image
-    
+
     @property
     def fitted_results(self):
         """ At test-time, one should call self.fitted_results
-        instead of self.forward() to get sorted version of 
+        instead of self.forward() to get sorted version of
         (verts, loss, iou, image)
         """
-        loss_dict, iou, image = self.forward()
+        loss_dict, iou, _ = self.forward()
         inds = torch.argsort(iou, descending=True)
         for k, v in loss_dict.items():
             loss_dict[k] = v[inds]
         iou = iou[inds]
-        image = image[inds]
         with torch.no_grad():
-            verts = self.apply_transformation()[inds]
+            verts = self.apply_transformation()[:, inds]
         rotations = self.rotations_matrix[inds]
         translations = self.translations[inds]
-        return FitResult(verts, rotations, translations, loss_dict, iou, image)
+        return FitResult(verts, rotations, translations, loss_dict, iou)
 
     def clustered_results(self, K):
         _attr = f'_clustered_results_{K}'
@@ -211,8 +226,10 @@ class PoseRenderer(nn.Module):
         verts_orig = self.vertices
         fitted_results = self.fitted_results
         rots = fitted_results.rotations
+        # If with base, rots is rotation in hands space,
+        # since they are applied to all B base poses, it's safe to compute just with rots
         distance_matrix = compute_pairwise_dist(verts_orig, rots, verbose=True)
-        center_indices, clusters = cluster_distance_matrix(distance_matrix, K=K)
+        center_indices, _ = cluster_distance_matrix(distance_matrix, K=K)
         def indexing(obj, l):
             if isinstance(obj, dict):
                 obj_out = dict()
@@ -220,21 +237,42 @@ class PoseRenderer(nn.Module):
                     obj_out[k] = v[l]
                 return obj_out
             return obj[l]
-            
-        res = FitResult(*tuple(
-            indexing(getattr(fitted_results, k), center_indices) 
-            for k in fitted_results._fields))
+
+        verts = fitted_results.verts[:, center_indices]
+        rotations = fitted_results.rotations[center_indices]
+        translations = fitted_results.translations[center_indices]
+        loss_dict = indexing(fitted_results.loss_dict, center_indices)
+        iou = fitted_results.iou[center_indices]
+        res = FitResult(
+            verts, rotations, translations, loss_dict, iou)
         setattr(self, _attr, res)
         return res
 
-    def render(self) -> np.ndarray:
+    def render(self) -> torch.Tensor:
         """
         Renders objects according to current rotation and translation.
 
         Returns:
-            images: ndarray (N_init, W, W)
+            images: ndarray (B, N_init, W, W)
         """
-        verts = self.apply_transformation()
-        images = self.renderer(verts, self.faces, mode='silhouettes')
-        images = images.detach().cpu().numpy()
+        verts = self.apply_transformation()  # (B, N, V, 3)
+        b = verts.size(0)
+        n = verts.size(1)
+        batch_faces = self.faces.repeat(b, n, 1, 1)
+        batch_K = self.camera_K.unsqueeze(1).repeat(1, n, 1, 1)  # (B, 3, 3) -> (B, N, 3, 3)
+        images = self.renderer(
+            verts.view(b*n, -1, 3),
+            batch_faces.view(b*n, -1, 3),
+            K=batch_K.view(b*n, -1, 3),
+            mode='silhouettes')
+        images = images.view(b, n, self.image_size, self.image_size)
         return images
+
+    def render_np(self) -> np.ndarray:
+        """
+        Renders objects according to current rotation and translation.
+
+        Returns:
+            images: ndarray (B, N_init, W, W)
+        """
+        return self.render().detach().cpu().numpy()
