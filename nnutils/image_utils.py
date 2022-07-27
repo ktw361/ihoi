@@ -59,7 +59,7 @@ def joint_bbox(*bboxes):
     return np.array([x1, y1, x2, y2])
 
 
-def crop_weak_cam(cam, bbox_topleft, oldo2n, 
+def crop_weak_cam(cam, bbox_topleft, oldo2n,
     new_center, new_size, old_size=224, resize=224):
     """
     Args:
@@ -68,7 +68,7 @@ def crop_weak_cam(cam, bbox_topleft, oldo2n,
         oldo2n: float scalar for bbox_scale
         new_center: (2,)
         new_size:   (2,)
-    
+
     Returns:
         new_cam: (3,)
         new_tl: (2,)
@@ -80,7 +80,7 @@ def crop_weak_cam(cam, bbox_topleft, oldo2n,
     offset = (prev_center - new_center)
 
     newo2n = resize/new_size
-    
+
     # t += offset / (resize / 2) / s  * oldo2n
     s *=  newo2n / oldo2n * old_size / resize
     t += 2 *  newo2n * offset / resize / s
@@ -121,13 +121,13 @@ def screen_intr_to_ndc_fp(cam, H, W):
     out = k @ cam
     f = torch.diagonal(out, dim1=-1, dim2=-2)[..., :2]
     p = out[..., 0:2, 2]
-    
-    return f, p    
+
+    return f, p
 
 
 def jitter_bbox(bbox, s_stdev, t_stdev):
     x1y1, x2y2 = bbox[..., :2], bbox[..., 2:]
-    center = (x1y1 + x2y2) / 2 
+    center = (x1y1 + x2y2) / 2
     ori_size = x2y2 - x1y1
 
     jitter_s = torch.exp(torch.rand(1) * s_stdev * 2 - s_stdev)
@@ -138,18 +138,18 @@ def jitter_bbox(bbox, s_stdev, t_stdev):
 
     center += jitter_t
     bbox[0:2] = center - new_size / 2
-    bbox[2:4] = center + new_size / 2   
-    return bbox 
+    bbox[2:4] = center + new_size / 2
+    return bbox
 
 
 def square_bbox(bbox, pad=0):
-    """ 
+    """
     Args:
-        bbox: xyxy 
+        bbox: (N, 4) xyxy
         pad: pad ratio
 
     Returns:
-        bbox: xyxy
+        bbox: (N, 4) xyxy
     """
     if not torch.is_tensor(bbox):
         is_numpy = True
@@ -158,9 +158,10 @@ def square_bbox(bbox, pad=0):
         is_numpy = False
 
     x1y1, x2y2 = bbox[..., :2], bbox[..., 2:]
-    center = (x1y1 + x2y2) / 2 
-    half_w = torch.max((x2y2 - x1y1) / 2, dim=-1)[0]
+    center = (x1y1 + x2y2) / 2
+    half_w = torch.max((x2y2 - x1y1) / 2, dim=-1).values
     half_w = half_w * (1 + 2 * pad)
+    half_w = half_w[:, None]
     bbox = torch.cat([center - half_w, center + half_w], dim=-1)
     if is_numpy:
         bbox = bbox.cpu().detach().numpy()
@@ -253,7 +254,7 @@ def crop_resize(img: np.ndarray, bbox, final_size=224, pad='constant', return_np
     max_x += pad_x1
     min_y += pad_y1
     max_y += pad_y1
-    
+
     img = Image.fromarray(img.astype(np.uint8))
     img = img.crop([min_x, min_y, max_x, max_y])
     img = img.resize((final_size, final_size))
@@ -823,7 +824,7 @@ def splat_with_wgt(feat, grid,  H, W):
     grid = grid.clone()
     # print('grid', grid)
     BIG_NEG = -1e+6
-    
+
     # N, D, h, w = feat.size()
     N, D, num_pixels_src = feat.size()
     num_pixels_trg = H * W
@@ -1053,7 +1054,7 @@ def blur(image, k, mask):
 ########################
 def display_gif(filename):
     with open(filename,'rb') as f:
-        display.display(display.Image(data=f.read(), format='png'))    
+        display.display(display.Image(data=f.read(), format='png'))
     # display.Image(filename="%s.png" % filename)
 
 
