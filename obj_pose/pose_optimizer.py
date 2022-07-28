@@ -380,7 +380,7 @@ class PoseOptimizer:
         obj_bbox_xyxy = xywh_to_xyxy(obj_bbox)
         obj_bbox_squared_xyxy = image_utils.square_bbox(
             obj_bbox_xyxy, self.ihoi_box_expand)
-        obj_bbox_squared = xyxy_to_xywh(obj_bbox_squared_xyxy).astype(int)
+        obj_bbox_squared = xyxy_to_xywh(obj_bbox_squared_xyxy).int()
 
         """ Get `image` and `mask` """
         image_patch = self.pad_and_crop( 
