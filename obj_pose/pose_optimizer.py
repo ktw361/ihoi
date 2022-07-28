@@ -35,7 +35,6 @@ from homan.utils.geometry import (
 Refinement-based pose optimizer.
 
 Origin: homan/pose_optimization.py
-
 """
 
 
@@ -621,18 +620,26 @@ def find_optimal_pose(
     else:
         base_translation = base_translation.clone()
 
+    """ V_out = (V_model @ R + T) @ R_base + T_base """
     V_rotated = torch.matmul(
-            (vertices @ base_rotation).unsqueeze_(1),
-            rotations_init.unsqueeze(0))
+        (vertices @ rotations_init).unsqueeze_(0),
+         base_rotation.unsqueeze(1))
+    # V_rotated = torch.matmul(
+    #         (vertices @ base_rotation).unsqueeze_(1),
+    #         rotations_init.unsqueeze(0))
     if translations_init is None:
         # Init B trans_init, each has N_init, then take mean of them
         translations_init = []
         for i in range(bsize):
             _translations_init = TCO_init_from_boxes_zup_autodepth(
-                bbox[i], V_rotated[i], K_global[i]).unsqueeze(1)
-            _translations_init -= base_translation[i] @ rotations_init
+                bbox[i], V_rotated[i], K_global[i]).unsqueeze_(1)
+            _translations_init -= base_translation[i]
+            _translations_init = _translations_init @ torch.inverse(base_rotation[i])
             translations_init.append(_translations_init)
-    translations_init = sum(translations_init) / len(translations_init)
+    if K_global.size(0) == 1:
+        translations_init = translations_init[0]
+    else:
+        translations_init = sum(translations_init) / len(translations_init)
 
     if debug:
         mask_viz = mask[0]  # select 0-th mask for visualization
@@ -695,12 +702,12 @@ def find_optimal_pose(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     for step in range(num_iterations):
         optimizer.zero_grad()
-        loss_dict, iou, sil = model()
+        loss_dict, _, sil = model()
         if debug and (step % viz_step == 0):
             debug_viz_folder = os.path.join(viz_folder, "poseoptim")
             os.makedirs(debug_viz_folder, exist_ok=True)
             imagify.viz_imgrow(
-                sil, overlays=[mask_viz,]*len(sil), viz_nb=4,
+                sil[0], overlays=[mask_viz,]*len(sil[0]), viz_nb=4,
                 path=os.path.join(debug_viz_folder, f"{step:04d}.png"))
 
         losses = sum(loss_dict.values())

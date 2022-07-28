@@ -3,9 +3,8 @@ import os
 import os.path as osp
 
 import torch
-import trimesh
 from nnutils.hand_utils import ManopthWrapper
-from nnutils.handmocap import get_handmocap_predictor
+from nnutils.handmocap import get_handmocap_predictor, collate_mocap_hand
 from datasets.epic_inf import EpicInference
 
 from obj_pose.pose_optimizer import PoseOptimizer, SavedContext
@@ -64,15 +63,16 @@ def main(args):
             hand_wrapper_flat = hand_wrapper_right
         else:
             raise ValueError
-        one_hand = mocap_predictions[0][side]
+        one_hand = collate_mocap_hand(mocap_predictions, side)
         # predict object
         pose_machine = PoseOptimizer(
             one_hand, obj_loader, hand_wrapper_flat,
             device=device,
         )
         pose_machine.fit_obj_pose(
-            image, obj_bbox, mask_obj, cat,
+            image[None], obj_bbox[None], mask_obj[None], cat,
             num_initializations=400, num_iterations=50,
+            put_hand_transform=True,
             sort_best=False, debug=False, viz=False
         )
         vid, frame_idx = dataset.get_vid_frame(idx)
