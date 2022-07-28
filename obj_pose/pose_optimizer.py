@@ -98,7 +98,7 @@ class PoseOptimizer:
             _hand_bbox_proc
         )
 
-        self._pred_hand_pose = _pred_hand_pose  # (1, 45)
+        self._pred_hand_pose = _pred_hand_pose  # (B, 45)
         self._pred_hand_betas = _pred_hand_betas
         self._hand_verts = _hand_verts
         self._hand_verts_orig = _hand_verts_orig
@@ -110,6 +110,9 @@ class PoseOptimizer:
         """ placeholder for cache after fitting """
         self._fit_model = None
         self._full_image = None
+
+    def __len__(self):
+        return len(self.global_cam)
 
     @property
     def pred_hand_pose(self):
@@ -150,6 +153,7 @@ class PoseOptimizer:
 
     @property
     def hand_translation(self):
+        """ (B, 1, 3) """
         return self._hand_translation
 
     def hand_simplemesh(self, cam_idx: int = 0):
@@ -184,7 +188,7 @@ class PoseOptimizer:
 
         Returns:
             rotation: (B, 3, 3) row-vec
-            translation: (B, 3)
+            translation: (B, 1, 3)
         """
         rotation = rot_cvt.axis_angle_to_matrix(rot_axisang)  # (1, 3) - > (1, 3, 3)
         rot_homo = geom_utils.rt_to_homo(rotation)
@@ -197,7 +201,7 @@ class PoseOptimizer:
         translate = torch.cat([tx, ty, fx/s], dim=1)
         translation = translate - joints[:, 5]
         rotation_row = rotation.transpose(1, 2)
-        return rotation_row, translation
+        return rotation_row, translation[:, None]
 
     def _calc_hand_mesh(self,
                         pred_hand_pose,
@@ -232,7 +236,7 @@ class PoseOptimizer:
             None, pred_hand_pose, mode='inner', return_mesh=False)
 
         cTh = geom_utils.rt_to_homo(
-            self.hand_rotation.transpose(1, 2), t=self.hand_translation)
+            self.hand_rotation.transpose(1, 2), t=self.hand_translation.squeeze(1))
         cTh = Transform3d(matrix=cTh.transpose(1, 2))
         v_transformed = cTh.transform_points(v_orig)
 
@@ -387,6 +391,28 @@ class PoseOptimizer:
         )[0]
         return crop_tensor
 
+    def batch_pad_and_crop(self,
+                           images: torch.Tensor,
+                           boxes: torch.Tensor,
+                           out_size: int) -> torch.Tensor:
+        """ batched version of pad_and_crop()
+
+        Args:
+            images: (B, ..., H, W)
+            boxes: (B, 4) xywh
+            out_size: int
+
+        Returns:
+            img_crops: (B, ..., crop_h, crop_w) in [0, 1]
+        """
+        bsize = len(images)
+        img_crops = [None for _ in range(bsize)]
+        for i in range(bsize):
+            img_crops[i] = self.pad_and_crop(
+                images[i], boxes[i], out_size)
+        img_crops = torch.stack(img_crops, 0)
+        return img_crops
+
     def finalize_without_fit(self,
                              image,
                              obj_bbox,
@@ -411,18 +437,17 @@ class PoseOptimizer:
             obj_bbox, self.ihoi_box_expand).int()
 
         bsize = len(image)
-        image_patch = [None for _ in range(bsize)]
-        obj_mask_patch = [None for _ in range(bsize)]
-        for i in range(bsize):
-            obj_mask_patch[i] = self.pad_and_crop(
-                object_mask[i], obj_bbox_squared[i], self.rend_size)
+        obj_mask_patch = self.batch_pad_and_crop(
+            object_mask, obj_bbox_squared, self.rend_size)
 
+        # Extra care for image_patch with (H, W, 3) shape
+        image_patch = [None for _ in range(bsize)]
+        for i in range(bsize):
             _image = transforms.ToTensor()(image[i])
             _image_patch = self.pad_and_crop(
                 _image, obj_bbox_squared[i], self.rend_size)
             image_patch[i] = np.asarray(transforms.ToPILImage()(_image_patch))
         image_patch = np.stack(image_patch, 0)
-        obj_mask_patch = torch.stack(obj_mask_patch, 0)
 
         """ Get camera """
         global_cam = self.global_cam
@@ -539,7 +564,7 @@ def find_optimal_pose(
         K_global: torch.Tensor (B, 3, 3), represents the global camera that
             captures the original image.
         base_rotation: torch.Tensor (B, 3, 3)
-        base_translation: torch.Tensor (B, 3)
+        base_translation: torch.Tensor (B, 1, 3)
 
     Returns:
         A PoseRenderer Object,
@@ -592,7 +617,7 @@ def find_optimal_pose(
         base_rotation = base_rotation.clone()
     if base_translation is None:
         base_translation = torch.zeros(
-            [bsize, 3], dtype=rotations_init.dtype, device=device)
+            [bsize, 1, 3], dtype=rotations_init.dtype, device=device)
     else:
         base_translation = base_translation.clone()
 
@@ -604,7 +629,7 @@ def find_optimal_pose(
         translations_init = []
         for i in range(bsize):
             _translations_init = TCO_init_from_boxes_zup_autodepth(
-                bbox[i], V_rotated[i], K_global[i])
+                bbox[i], V_rotated[i], K_global[i]).unsqueeze(1)
             _translations_init -= base_translation[i] @ rotations_init
             translations_init.append(_translations_init)
     translations_init = sum(translations_init) / len(translations_init)

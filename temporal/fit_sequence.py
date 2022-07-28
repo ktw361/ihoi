@@ -35,29 +35,33 @@ def get_args():
     return args
 
 
-def init_ho_forwarder(pose_machine, 
-                      obj_bbox, 
-                      mask_hand, 
-                      mask_obj, 
-                      obj_pose_results,
+def init_ho_forwarder(pose_machine,
+                      obj_bbox,
+                      mask_hand,
+                      mask_obj,
                       hand_side,
                       pose_idx) -> HOForwarder:
+    # Optimize K cluster scales
+    K = 10
+    obj_pose_results = pose_machine.pose_model.clustered_results(K=K)
+
+    bsize = len(pose_machine)
     obj_bbox_squared = image_utils.square_bbox_xywh(
         obj_bbox, pose_machine.ihoi_box_expand).int()
-    obj_mask_patch = pose_machine.pad_and_crop(
+    obj_mask_patch = pose_machine.batch_pad_and_crop(
         mask_obj, obj_bbox_squared, pose_machine.rend_size)
-    hand_mask_patch = pose_machine.pad_and_crop(
+    hand_mask_patch = pose_machine.batch_pad_and_crop(
         mask_hand, obj_bbox_squared, pose_machine.rend_size)
     mano_pca_pose = pose_machine.recover_pca_pose()
-    mano_rot = torch.zeros([1, 3], device=mano_pca_pose.device)
-    mano_trans = torch.zeros([1, 3], device=mano_pca_pose.device)
-    camintr = pose_machine.pose_model.K  # could be pose_machine.ihoi_cam
+    mano_rot = torch.zeros([bsize, 3], device=mano_pca_pose.device)
+    mano_trans = torch.zeros([bsize, 3], device=mano_pca_pose.device)
+    camintr = pose_machine.pose_model.camera_K  # could be pose_machine.ihoi_cam
 
     homan_kwargs = dict(
         translations_object = obj_pose_results.translations[[pose_idx]],
         rotations_object = obj_pose_results.rotations[[pose_idx]],
         verts_object_og = pose_machine.pose_model.vertices,
-        faces_object = pose_machine.pose_model.faces[[pose_idx]],
+        faces_object = pose_machine.pose_model.faces[None],
         translations_hand = pose_machine.hand_translation,
         rotations_hand = pose_machine.hand_rotation,
         verts_hand_og = pose_machine.hand_verts,
@@ -67,7 +71,7 @@ def init_ho_forwarder(pose_machine,
         mano_betas = pose_machine.pred_hand_betas,
         mano_pca_pose = pose_machine.recover_pca_pose(),
         faces_hand = pose_machine.hand_faces,
-        
+
         scale_object = 1.5,
         scale_hand = 1.0,
 
@@ -87,8 +91,8 @@ def init_ho_forwarder(pose_machine,
     return homan
 
 
-def optimize_scale(homan, 
-                   num_steps=100, 
+def optimize_scale(homan,
+                   num_steps=100,
                    lr=1e-2,
                    verbose=False) -> HOForwarder:
     scale_weights = dict(
@@ -159,7 +163,7 @@ def reinit_ho_forwarder(pose_machine,
         mano_betas = pose_machine.pred_hand_betas,
         mano_pca_pose = pose_machine.recover_pca_pose(),
         faces_hand = pose_machine.hand_faces,
-        
+
         scale_object = homan_prev.scale_object.detach().clone(),
         scale_hand = homan_prev.scale_hand.detach().clone(),
 
@@ -179,7 +183,7 @@ def reinit_ho_forwarder(pose_machine,
     return homan
 
 
-def optimize_temporal(homan, 
+def optimize_temporal(homan,
                       homan_prev=None,
                       num_iterations=100,
                       lr=1e-3,
@@ -198,8 +202,8 @@ def optimize_temporal(homan,
     )
 
     all_params = [
-        homan.rotations_hand, 
-        homan.translations_hand, 
+        homan.rotations_hand,
+        homan.translations_hand,
         homan.mano_pca_pose,
         homan.translations_object,
         homan.rotations_object,
@@ -208,7 +212,7 @@ def optimize_temporal(homan,
         {
             'params': all_params,
             'lr': lr
-        }   
+        }
     ])
     # homan(loss_weights, scale_object=scale_object2)
     for step in range(num_iterations):
@@ -273,12 +277,23 @@ def main(args):
     pose_machine.fit_obj_pose(
         images, obj_bboxes, obj_masks, cat,
         put_hand_transform=True,
-        num_initializations=400, num_iterations=50,
+        num_initializations=10, num_iterations=5,
         sort_best=False, debug=False, viz=False
     )
     # Optimize K cluster scales
-    K = 10
-    obj_pose_results = pose_machine.pose_model.clustered_results(K=K)
+    # K = 10
+    # obj_pose_results = pose_machine.pose_model.clustered_results(K=K)
+
+    torch.cuda.empty_cache()
+    homan = init_ho_forwarder(
+        pose_machine,
+        obj_bboxes,
+        hand_masks, obj_masks,
+        side,
+        pose_idx=0
+    )
+
+    homan = optimize_scale(homan, num_steps=100, lr=1e-2, verbose=True)
 
     return
     T = end - start + 1
@@ -287,7 +302,7 @@ def main(args):
         homan[t, k] = init_ho_forwarder(
             pose_machine,
             obj_bboxes[t],
-            hand_masks[t], obj_masks[t], 
+            hand_masks[t], obj_masks[t],
             obj_pose_results,
             side,
             k)
@@ -311,7 +326,7 @@ def main(args):
                 hand_masks[t], obj_masks[t], side,
                 homan[t-1, k])
             homan[t, k] = optimize_temporal(homan[t, k], homan[t-1, k])
-    
+
     """ Now we have K sequence of {gt, ..., end}... """
     # sample_dir = osp.join(args.out, f"{info.vid}_{info.start}")
 

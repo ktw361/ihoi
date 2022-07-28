@@ -16,6 +16,7 @@ from nnutils import image_utils, geom_utils
 
 from nnutils.hand_utils import ManopthWrapper
 
+
 def get_handmocap_predictor(
         mocap_dir='externals/frankmocap',
         checkpoint_hand='extra_data/hand_module/pretrained_weights/pose_shape_best.pth', 
@@ -25,7 +26,6 @@ def get_handmocap_predictor(
     hand_mocap = HandMocap(osp.join(mocap_dir, checkpoint_hand), 
         osp.join(mocap_dir, smpl_dir), device = device)
     return hand_mocap
-
 
 
 def process_mocap_predictions(mocap_predictions, image, hand_wrapper=None, mask=None):

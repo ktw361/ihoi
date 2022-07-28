@@ -16,6 +16,7 @@ from libzhifan.geometry import (
     SimpleMesh, visualize_mesh, projection, CameraManager)
 
 from libyana.conversions import npt
+from libzhifan.numeric import check_shape, check_shape_equal
 
 
 """ A re-implemented version of homan_core.py
@@ -26,12 +27,12 @@ if Y = RX + T, then sY = sRX + sT.
 
 class HOForwarder(nn.Module):
     def __init__(self,
-                 translations_object,  # (1, 1, 3)
+                 translations_object,  # (1, 3)
                  rotations_object,
                  verts_object_og,
                  faces_object,
 
-                 translations_hand,  # (1, 1, 3)
+                 translations_hand,  # (B, 3)
                  rotations_hand,
                  verts_hand_og,
                  hand_sides,
@@ -71,6 +72,7 @@ class HOForwarder(nn.Module):
         """
         super().__init__()
         self.ihoi_img_patch = ihoi_img_patch
+        self.bsize = len(camintr)
 
         """ Initialize object pamaters """
         if rotations_object.shape[-1] == 3:
@@ -162,14 +164,12 @@ class HOForwarder(nn.Module):
             if camintr.dim() == 2:
                 camintr = camintr.unsqueeze(0)
             camintr = camintr.cuda().float()
-        rot = torch.cuda.FloatTensor([[[1, 0, 0], [0, 1, 0], [0, 0, 1]]])
-        trans = torch.zeros(1, 3).cuda()
         self.register_buffer("camintr", camintr)
         self.image_size = image_size
         self.renderer = nr.renderer.Renderer(image_size=self.image_size,
                                              K=camintr.clone(),
-                                             R=rot,
-                                             t=trans,
+                                             R=torch.eye(3, device='cuda')[None],
+                                             t=torch.zeros([1, 3], device='cuda'),
                                              orig_size=1)
         self.renderer.light_direction = [1, 0.5, 1]
         self.renderer.light_intensity_direction = 0.3
@@ -178,9 +178,9 @@ class HOForwarder(nn.Module):
 
         mask_h, mask_w = target_masks_hand.shape[-2:]
         self.register_buffer(
-            "masks_human", target_masks_hand.reshape(1, 1, mask_h, mask_w).bool())
+            "masks_human", target_masks_hand.reshape(self.bsize, mask_h, mask_w).bool())
         self.register_buffer(
-            "masks_object", target_masks_object.reshape(1, 1, mask_h, mask_w).bool())
+            "masks_object", target_masks_object.reshape(self.bsize, mask_h, mask_w).bool())
 
         self.losses = Losses(
             renderer=self.renderer,
@@ -193,8 +193,25 @@ class HOForwarder(nn.Module):
             hand_nb=self.hand_nb,
             inter_type=inter_type,
         )
+        self._check_shape()
 
-    def get_verts_object(self, 
+    def _check_shape(self):
+        check_shape(self.faces_hand, (-1, -1, 3))
+        check_shape(self.faces_object, (-1, -1, 3))
+        check_shape(self.camintr, (-1, 3, 3))
+        check_shape(self.masks_human, (-1, -1, -1))
+        mask_shape = self.masks_human.shape
+        check_shape(self.masks_object, mask_shape)
+        check_shape(self.ref_mask_object, mask_shape)
+        check_shape(self.keep_mask_object, mask_shape)
+        check_shape(self.ref_mask_hand, mask_shape)
+        check_shape(self.keep_mask_hand, mask_shape)
+        check_shape(self.rotations_hand, (-1, 3, 2))  # Cont repr
+        check_shape(self.translations_hand, (-1, 1, 3))
+        check_shape(self.rotations_object, (1, 3, 2))
+        check_shape(self.translations_object, (1, 1, 3))
+
+    def get_verts_object(self,
                          translations_object=None,
                          scale_object=None,
                          **kwargs):
@@ -407,7 +424,7 @@ class HOForwarder(nn.Module):
             mhand = SimpleMesh(verts_hand, self.faces_hand, tex_color=hand_color)
             mobj = SimpleMesh(verts_obj, self.faces_object, tex_color=obj_color)
         return mhand, mobj
-        
+
     def to_scene(self, show_axis=False, viewpoint='nr', **mesh_kwargs):
         """ Returns a trimesh.Scene """
         mhand, mobj = self.get_meshes(**mesh_kwargs)
@@ -431,7 +448,7 @@ class HOForwarder(nn.Module):
         a = np.hstack([a3, a2, a1])
         return np.vstack([a,
                           b])
-    
+
     def render_scene(self, **mesh_kwargs) -> np.ndarray:
         """ returns: (H, W, 3) """
         mhand, mobj = self.get_meshes(**mesh_kwargs)

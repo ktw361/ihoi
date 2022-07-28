@@ -58,8 +58,8 @@ class PoseRenderer(nn.Module):
             rotation_init: (N_init, 3, 3)
             translation_init: (1, 3)
             base_rotation: (B, 3, 3)
-            base_translation:  (B, 3)
-            K: (B, 3, 3)
+            base_translation:  (B, 1, 3)
+            camera_K: (B, 3, 3)
                 local camera of the object
 
         """
@@ -68,6 +68,7 @@ class PoseRenderer(nn.Module):
         dtype = vertices.dtype
         device = vertices.device
         self.image_size = ref_image.shape[-1]
+        self.bsize = len(camera_K)
 
         vertices = torch.as_tensor(vertices, device=device)
         faces = torch.as_tensor(faces, device=device)
@@ -79,7 +80,8 @@ class PoseRenderer(nn.Module):
         else:
             base_rotation = base_rotation.clone()
         if base_translation is None:
-            base_translation = torch.zeros([1, 3], dtype=dtype, device=device)
+            base_translation = torch.zeros(
+                [self.bsize, 1, 3], dtype=dtype, device=device)
         else:
             base_translation = base_translation.clone()
         self.register_buffer('base_rotation', base_rotation)
@@ -140,11 +142,11 @@ class PoseRenderer(nn.Module):
         rots = self.base_rotation.unsqueeze(1) @ self.rotations_matrix.unsqueeze(0)
         transl = torch.add(
                 torch.matmul(
-                    self.base_translation.unsqueeze(1).unsqueeze(
-                        1),  # (B, 3) -> (B, 1, 1, 3)
+                    self.base_translation.unsqueeze(
+                        1),  # (B, 1, 3) -> (B, 1, 1, 3)
                     self.rotations_matrix.unsqueeze(0)  # (N, 3, 3) -> (1, N, 3, 3)
                 ),  # (B, N, 1, 3)
-                self.translations.unsqueeze(1).unsqueeze(0)  # (N, 3) -> (1, N, 1, 3)
+                self.translations.unsqueeze(0)  # (N, 1, 3) -> (1, N, 1, 3)
             ) # (B, N, 1, 3)
         return torch.matmul(self.vertices, rots) + transl
 
