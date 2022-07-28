@@ -1,4 +1,3 @@
-from gettext import translation
 from typing import NamedTuple
 import numpy as np
 import torch
@@ -8,10 +7,10 @@ from scipy.ndimage.morphology import distance_transform_edt
 
 from obj_pose.utils import compute_pairwise_dist
 from obj_pose.cluster_distance_matrix import cluster_distance_matrix
+from homan.utils.geometry import rot6d_to_matrix
 
 from libyana.metrics import iou as ioumetrics
-
-from homan.utils.geometry import rot6d_to_matrix
+from libzhifan.numeric import check_shape
 
 
 REND_SIZE = 256
@@ -105,8 +104,7 @@ class PoseRenderer(nn.Module):
                                          requires_grad=True)
         mask_edge = self.compute_edges(image_ref).cpu().numpy()
         edt = distance_transform_edt(1 - (mask_edge > 0))**(power * 2)
-        self.register_buffer(
-            "edt_ref_edge", torch.from_numpy(edt))
+        self.register_buffer("edt_ref_edge", torch.from_numpy(edt))
         # Setup renderer.
         if camera_K is None:
             camera_K = torch.FloatTensor([
@@ -124,10 +122,22 @@ class PoseRenderer(nn.Module):
         self.camera_K = camera_K
 
         self.to(device)
+        self._check_shape(self.bsize, num_init=num_initializations)
+
+    def _check_shape(self, bsize, num_init):
+        check_shape(self.image_ref, (-1, self.image_size, self.image_size))
+        check_shape(self.keep_mask, (-1, self.image_size, self.image_size))
+        check_shape(self.edt_ref_edge, (-1, self.image_size, self.image_size))
+        check_shape(self.vertices, (-1, 3))
+        check_shape(self.faces, (-1, 3))
+        check_shape(self.rotations_matrix, (num_init, 3, 3))
+        check_shape(self.translations, (num_init, 1, 3))
+        check_shape(self.base_rotation, (bsize, 3, 3))
+        check_shape(self.base_translation, (bsize, 1, 3))
 
     @property
     def rotations_matrix(self) -> torch.Tensor:
-        """ (num_initialization, 3, 3) """
+        """ (N, 3, 3) where N = num_initializations """
         rot_mats = rot6d_to_matrix(self.rotations)
         return rot_mats
 
@@ -135,18 +145,19 @@ class PoseRenderer(nn.Module):
         """
         Applies current rotation and translation to vertices.
 
-        V_out = (V_model @ R_base + T_base) @ R + T
+            V_out = (V_model @ R + T) @ R_base + T_base,
+        which first apply transformation in hand-space,
+        then transform hand-space to camera-space.
 
         Out shape: (B, N_init, V, 3)
         """
-        rots = self.base_rotation.unsqueeze(1) @ self.rotations_matrix.unsqueeze(0)
+        rots = self.rotations_matrix.unsqueeze(0) @ self.base_rotation.unsqueeze(1)
         transl = torch.add(
                 torch.matmul(
-                    self.base_translation.unsqueeze(
-                        1),  # (B, 1, 3) -> (B, 1, 1, 3)
-                    self.rotations_matrix.unsqueeze(0)  # (N, 3, 3) -> (1, N, 3, 3)
+                    self.translations.unsqueeze(0),  # (N, 1, 3) -> (1, N, 1, 3)
+                    self.base_rotation.unsqueeze(1),  # (B, 3, 3) -> (B, 1, 3, 3)
                 ),  # (B, N, 1, 3)
-                self.translations.unsqueeze(0)  # (N, 1, 3) -> (1, N, 1, 3)
+                self.base_translation.unsqueeze(1),  # (B, 1, 3) -> (B, 1, 1, 3)
             ) # (B, N, 1, 3)
         return torch.matmul(self.vertices, rots) + transl
 
