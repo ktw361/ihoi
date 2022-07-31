@@ -624,9 +624,6 @@ def find_optimal_pose(
     V_rotated = torch.matmul(
         (vertices @ rotations_init).unsqueeze_(0),
          base_rotation.unsqueeze(1))
-    # V_rotated = torch.matmul(
-    #         (vertices @ base_rotation).unsqueeze_(1),
-    #         rotations_init.unsqueeze(0))
     if translations_init is None:
         # Init B trans_init, each has N_init, then take mean of them
         translations_init = []
@@ -634,7 +631,7 @@ def find_optimal_pose(
             _translations_init = TCO_init_from_boxes_zup_autodepth(
                 bbox[i], V_rotated[i], K_global[i]).unsqueeze_(1)
             _translations_init -= base_translation[i]
-            _translations_init = _translations_init @ torch.inverse(base_rotation[i])
+            _translations_init = _translations_init @ base_rotation[i].T  # inv
             translations_init.append(_translations_init)
     if K_global.size(0) == 1:
         translations_init = translations_init[0]

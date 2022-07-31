@@ -32,7 +32,7 @@ def plot_pose_summaries(pose_machine: PoseOptimizer, pose_idx=0) -> plt.figure:
     """ homans: list of HO_forwarder """
     l = len(pose_machine.global_cam)
     num_cols = 5
-    num_rows = l // num_cols + 1
+    num_rows = (l + num_cols - 1) // num_cols
     fig, axes = plt.subplots(
         nrows=num_rows, ncols=num_cols,
         sharex=True, sharey=True, figsize=(20, 20))
