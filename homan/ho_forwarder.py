@@ -16,13 +16,17 @@ from libzhifan.geometry import (
     SimpleMesh, visualize_mesh, projection, CameraManager)
 
 from libyana.conversions import npt
-from libzhifan.numeric import check_shape, check_shape_equal
+from libzhifan.numeric import check_shape
 
 
-""" A re-implemented version of homan_core.py
+""" A modified version of homan_core.py
 
+Ps 1.
 Translation is inheritly related to scale.
 if Y = RX + T, then sY = sRX + sT.
+
+Ps 2.
+Batch dimension == Time dimension
 """
 
 class HOForwarder(nn.Module):
@@ -72,7 +76,8 @@ class HOForwarder(nn.Module):
         """
         super().__init__()
         self.ihoi_img_patch = ihoi_img_patch
-        self.bsize = len(camintr)
+        bsize = len(camintr)
+        self.bsize = bsize
 
         """ Initialize object pamaters """
         if rotations_object.shape[-1] == 3:
@@ -88,7 +93,7 @@ class HOForwarder(nn.Module):
         # Zhifan: Note we modify translation to be a function of scale:
         # T(s) = s * T_init
         self.scale_object = nn.Parameter(
-            torch.as_tensor(scale_object),
+            torch.as_tensor([scale_object]),
             requires_grad=True,
         )
         self.register_buffer("int_scale_object_mean", torch.ones(1).float())
@@ -103,7 +108,6 @@ class HOForwarder(nn.Module):
         self.translations_hand = nn.Parameter(translation_init,
                                               requires_grad=True)
         rotations_hand = rotations_hand.detach().clone()
-        self.obj_rot_mult = 1  # This scaling has no effect !
         if rotations_hand.shape[-1] == 3:
             rotations_hand = matrix_to_rot6d(rotations_hand)
         self.rotations_hand = nn.Parameter(rotations_hand, requires_grad=True)
@@ -127,13 +131,12 @@ class HOForwarder(nn.Module):
             self.mano_betas = nn.Parameter(torch.zeros_like(mano_betas),
                                            requires_grad=True)
             self.register_buffer("scale_hand",
-                                 torch.as_tensor(scale_hand))
+                                 torch.as_tensor([scale_hand]))
         else:
             self.register_buffer("mano_betas", torch.zeros_like(mano_betas))
             self.scale_hand = nn.Parameter(
                 scale_hand * torch.ones(1).float(),
-                requires_grad=True,
-            )
+                requires_grad=True)
         self.register_buffer("verts_hand_og", verts_hand_og)
         self.register_buffer("int_scale_hand_mean",
                              torch.Tensor([1.0]).float().cuda())
@@ -145,15 +148,14 @@ class HOForwarder(nn.Module):
         self.register_buffer("keep_mask_hand",
                              (target_masks_hand >= 0).float())
 
-        self.register_buffer("faces_object", faces_object)
+        self.register_buffer("faces_object", faces_object.repeat(bsize, 1, 1))
         self.register_buffer(
             "textures_object",
-            torch.ones(faces_object.shape[0], faces_object.shape[1], 1, 1, 1,
-                       3))
+            torch.ones(bsize, faces_object.shape[1], 1, 1, 1, 3))
         self.register_buffer(
             "textures_hand",
-            torch.ones(faces_hand.shape[0], faces_hand.shape[1], 1, 1, 1, 3))
-        self.register_buffer("faces_hand", faces_hand)
+            torch.ones(bsize, faces_hand.shape[1], 1, 1, 1, 3))
+        self.register_buffer("faces_hand", faces_hand.repeat(bsize, 1, 1))
         self.cuda()
 
         # Setup renderer
@@ -177,10 +179,13 @@ class HOForwarder(nn.Module):
         self.renderer.background_color = [1.0, 1.0, 1.0]
 
         mask_h, mask_w = target_masks_hand.shape[-2:]
+        # Following two are used by ordinal loss
         self.register_buffer(
-            "masks_human", target_masks_hand.reshape(self.bsize, mask_h, mask_w).bool())
+            "masks_human", 
+            target_masks_hand.view(self.bsize, 1, mask_h, mask_w).bool())
         self.register_buffer(
-            "masks_object", target_masks_object.reshape(self.bsize, mask_h, mask_w).bool())
+            "masks_object", 
+            target_masks_object.view(self.bsize, 1, mask_h, mask_w).bool())
 
         self.losses = Losses(
             renderer=self.renderer,
@@ -193,37 +198,50 @@ class HOForwarder(nn.Module):
             hand_nb=self.hand_nb,
             inter_type=inter_type,
         )
-        self._check_shape()
+        self._check_shape(bsize=self.bsize)
 
-    def _check_shape(self):
-        check_shape(self.faces_hand, (-1, -1, 3))
-        check_shape(self.faces_object, (-1, -1, 3))
-        check_shape(self.camintr, (-1, 3, 3))
-        check_shape(self.masks_human, (-1, -1, -1))
-        mask_shape = self.masks_human.shape
-        check_shape(self.masks_object, mask_shape)
-        check_shape(self.ref_mask_object, mask_shape)
+    def _check_shape(self, bsize):
+        check_shape(self.faces_hand, (bsize, -1, 3))
+        check_shape(self.faces_object, (bsize, -1, 3))
+        check_shape(self.camintr, (bsize, 3, 3))
+        check_shape(self.ref_mask_object, (bsize, -1, -1))
+        mask_shape = self.ref_mask_object.shape
         check_shape(self.keep_mask_object, mask_shape)
         check_shape(self.ref_mask_hand, mask_shape)
         check_shape(self.keep_mask_hand, mask_shape)
-        check_shape(self.rotations_hand, (-1, 3, 2))  # Cont repr
-        check_shape(self.translations_hand, (-1, 1, 3))
+        check_shape(self.rotations_hand, (bsize, 3, 2))
+        check_shape(self.translations_hand, (bsize, 1, 3))
         check_shape(self.rotations_object, (1, 3, 2))
         check_shape(self.translations_object, (1, 1, 3))
+        # ordinal loss
+        check_shape(self.masks_object, (bsize, 1, -1, -1))
+        check_shape(self.masks_human, (bsize, 1, -1, -1))
 
     def get_verts_object(self,
-                         translations_object=None,
+                         translations_o2h=None,
                          scale_object=None,
-                         **kwargs):
-        rotations_object = rot6d_to_matrix(self.obj_rot_mult *
-                                           self.rotations_object)
-        translations_object = self.translations_object \
-            if translations_object is None else translations_object
+                         **kwargs) -> torch.Tensor:
+        """
+            V_out = (V_model x R_o2h + T_o2h) x R_hand + T_hand
+                  = V x (R_o2h x R_hand) + (T_o2h x R_hand + T_hand)
+        where self.rotations/translations_object is R/T_o2h from object to hand
+
+        Returns:
+            verts_object: (B, V, 3)
+        """
+        rotations_o2h = rot6d_to_matrix(self.rotations_object)
+        translations_o2h = self.translations_object \
+            if translations_o2h is None else translations_o2h
         intrinsic_scales = self.scale_object if scale_object is None else scale_object
+        """ Compound T_o2c (T_obj w.r.t camera) = T_h2c x To2h_ """
+        R_hand = rot6d_to_matrix(self.rotations_hand)
+        T_hand = self.translations_hand
+        rot_o2c = rotations_o2h @ R_hand
+        transl_o2c = translations_o2h @ R_hand + T_hand
         obj_verts = compute_transformation_persp(
             meshes=self.verts_object_og,
-            translations=translations_object,
-            rotations=rotations_object,
+            translations=transl_o2c,
+            rotations=rot_o2c,
             intrinsic_scales=intrinsic_scales
         )
         return obj_verts
@@ -304,10 +322,11 @@ class HOForwarder(nn.Module):
                 f"Expected hand_proj_mode {self.hand_proj_mode} to be in [ortho|persp]"
             )
 
-    def compute_ordinal_depth_loss(self, return_aux=False, **mesh_kwargs):
-        verts_object = self.get_verts_object(**mesh_kwargs)
-        verts_hand = self.get_verts_hand(**mesh_kwargs)
-
+    def compute_ordinal_depth_loss(self, 
+                                   verts_hand,
+                                   verts_object,
+                                   return_aux=False, 
+                                   **mesh_kwargs):
         silhouettes = []
         depths = []
 
@@ -386,8 +405,7 @@ class HOForwarder(nn.Module):
         if loss_weights is None or loss_weights['lw_sil_hand'] > 0:
             loss_dict.update(
                 self.losses.compute_sil_loss_hand(verts=verts_hand,
-                                                  faces=[self.faces_hand] *
-                                                  len(verts_hand)))
+                                                  faces=self.faces_hand))
         if loss_weights is None or loss_weights["lw_inter"] > 0:
             # Interaction acts only on hand !
             inter_verts_object = verts_object.unsqueeze(1)
@@ -412,7 +430,8 @@ class HOForwarder(nn.Module):
                     intrinsic_mean=self.int_scale_hand_mean,
                 )
         if loss_weights is None or loss_weights["lw_depth"] > 0:
-            loss_dict.update(self.compute_ordinal_depth_loss(**mesh_kwargs))
+            loss_dict.update(self.compute_ordinal_depth_loss(
+                verts_hand, verts_object, **mesh_kwargs))
         return loss_dict, metric_dict
 
     def get_meshes(self, **mesh_kwargs) -> List[SimpleMesh]:
