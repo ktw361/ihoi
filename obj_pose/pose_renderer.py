@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import neural_renderer as nr
 from scipy.ndimage.morphology import distance_transform_edt
+from functools import cached_property
 
 from obj_pose.utils import compute_pairwise_dist
 from obj_pose.cluster_distance_matrix import cluster_distance_matrix
@@ -192,30 +193,34 @@ class PoseRenderer(nn.Module):
         behind = torch.max(-coord_z, zeros).sum(dim=(1, 2))
         too_far = torch.max(coord_z - self.renderer.far, zeros).sum(dim=(1, 2))
         loss = lower_right + upper_left + behind + too_far  # (B*N)
-        return loss.view(b, n).sum(0)
+        return loss.view(b, n).mean(0)
 
     def compute_edges(self, silhouette: torch.Tensor) -> torch.Tensor:
         return self.pool(silhouette) - silhouette
 
     def forward(self):
+        """
+        For losses, sum over dim=(2, 3) which are (H, W), 
+        and take mean over dim=0 which is batch dimension.
+        """
         verts = self.apply_transformation()
         image = self.keep_mask[:, None] * self.render()  # (B, N, W, W)
         image_ref = self.image_ref[:, None]
         b, n, w = image.size(0), image.size(1), self.image_size
         loss_dict = {}
-        loss_dict["mask"] = torch.sum(
-            (image - image_ref)**2, dim=(0, 2, 3))  # TODO(zhifan): sum or mean
+        loss_dict["mask"] = torch.sum((image - image_ref)**2, dim=(2, 3)).mean(dim=0)
         with torch.no_grad():
             iou = ioumetrics.batch_mask_iou(
                 image.view(b*n, w, w).detach(),
                 image_ref.repeat(1, n, 1, 1).view(b*n, w, w).detach())  # (B*N,)
             iou = iou.view(b, n).mean(0)  # (N,)
         loss_dict["chamfer"] = self.lw_chamfer * torch.sum(
-            self.compute_edges(image) * self.edt_ref_edge[:, None], dim=(0, 2, 3))
+            self.compute_edges(image) * self.edt_ref_edge[:, None], 
+            dim=(2, 3)).mean(dim=0)
         loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(verts)
         return loss_dict, iou, image
 
-    @property
+    @cached_property
     def fitted_results(self):
         """ At test-time, one should call self.fitted_results
         instead of self.forward() to get sorted version of
