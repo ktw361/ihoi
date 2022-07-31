@@ -153,22 +153,19 @@ class Losses():
             return interacting
 
     def compute_sil_loss_hand(self, verts, faces):
-        loss_sil = torch.Tensor([0.0]).float().cuda()
-        for i in range(len(verts)):
-            camintr = self.camintr[i]
-            # Rendering happens in ROI
-            rend = self.renderer(
-                verts[[i], ...],
-                faces[i],
-                K=camintr.unsqueeze(0),
-                mode="silhouettes")
-            image = self.keep_mask_hand * rend
-            l_m = torch.sum((image - self.ref_mask_hand)**
-                            2) / self.keep_mask_hand.sum()
-            loss_sil += l_m
+        # Rendering happens in ROI
+        rend = self.renderer(
+            verts,
+            faces,
+            K=self.camintr,
+            mode="silhouettes")
+        image = self.keep_mask_hand * rend
+        loss_sil = torch.sum(
+                (image - self.ref_mask_hand)**2) / self.keep_mask_hand.sum()
         return {"loss_sil_hand": loss_sil / len(verts)}
 
     def compute_sil_loss_object(self, verts, faces):
+        # TODO: simplify and check divide by verts?
         loss_sil = torch.Tensor([0.0]).float().cuda()
         # Rendering happens in ROI
         camintr = self.camintr
