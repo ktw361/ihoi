@@ -94,7 +94,9 @@ def read_mask_with_occlusion(path: str,
         x1 = min(max(0, x1), mask.shape[1])
         y1 = min(max(0, y1), mask.shape[0])
         mask_hand_crop = np.zeros_like(mask_hand)
+        mask_hand_crop[mask_hand == 1] = -1
         mask_hand_crop[y0:y1, x0:x1] = mask_hand[y0:y1, x0:x1]
+        mask_hand_crop[mask_obj == 1] = -1
         mask_hand = mask_hand_crop
     # This has to happen after cropping
     mask_obj[mask_hand == 1] = -1
