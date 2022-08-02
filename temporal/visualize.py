@@ -23,12 +23,13 @@ def plot_summaries(homans) -> plt.figure:
         idx += 1
         if idx >= l:
             break
-    
+
     plt.tight_layout()
     return fig
 
 
-def plot_pose_summaries(pose_machine: PoseOptimizer, pose_idx=0) -> plt.figure:
+def plot_pose_summaries(pose_machine: PoseOptimizer,
+                        pose_idx=0) -> plt.figure:
     """ homans: list of HO_forwarder """
     l = len(pose_machine.global_cam)
     num_cols = 5
@@ -37,20 +38,22 @@ def plot_pose_summaries(pose_machine: PoseOptimizer, pose_idx=0) -> plt.figure:
         nrows=num_rows, ncols=num_cols,
         sharex=True, sharey=True, figsize=(20, 20))
     for cam_idx, ax in enumerate(axes.flat, start=0):
-        img = pose_machine.render_model_output(pose_idx, cam_idx=cam_idx, kind='ihoi')
+        img = pose_machine.render_model_output(
+            pose_idx, cam_idx=cam_idx, kind='ihoi',
+            with_obj=True)
         ax.imshow(img)
         ax.set_axis_off()
         if cam_idx == l-1:
             break
-    
+
     plt.tight_layout()
     return fig
 
 
-def concat_pose_meshes(pose_machine: PoseOptimizer, 
+def concat_pose_meshes(pose_machine: PoseOptimizer,
                        pose_idx=0,
                        obj_file=None):
-    """ 
+    """
     Returns a list of SimpleMesh,
     offset each timestep for easier comparison?
     """
@@ -68,7 +71,7 @@ def concat_pose_meshes(pose_machine: PoseOptimizer,
         obj_mesh.apply_translation_([cam_idx * disp, 0, 0])
         meshes.append(hand_mesh)
         meshes.append(obj_mesh)
-    
+
     if obj_file is not None:
         visualize_mesh(meshes, show_axis=False).export(
             obj_file)
