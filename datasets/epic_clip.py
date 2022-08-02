@@ -68,6 +68,7 @@ class EpicClipDataset(Dataset):
                  all_boxes='/home/skynet/Zhifan/data/epic_analysis/clip_boxes.pkl',
                  image_size=(1280, 720), # (640, 360),
                  crop_hand_mask=True,
+                 sample_frames=20,
                  *args,
                  **kwargs):
         """_summary_
@@ -80,6 +81,8 @@ class EpicClipDataset(Dataset):
             image_size: Tuple of (W, H)
             crop_hand_mask: If True, will crop hand mask with only pixels
                 inside hand_bbox.
+            sample_frames: 
+                whether to subsample frames to a reduced number
         """
         super().__init__(*args, **kwargs)
         self.epic_rgb_root = osp.join(epic_root, 'rgb_root')
@@ -87,6 +90,7 @@ class EpicClipDataset(Dataset):
         self.hoa_root = osp.join(epic_root, 'hoa')
         self.image_size = image_size
         self.crop_hand_mask = crop_hand_mask
+        self.sample_frames = sample_frames
 
         self.box_scale = np.asarray(image_size * 2) / ((1920, 1080) * 2)
         self.data_infos = self._read_image_sets(image_sets)
@@ -101,8 +105,8 @@ class EpicClipDataset(Dataset):
         with open(image_sets) as fp:
             infos = json.load(fp)
 
-        infos = [ClipInfo(**v) 
-                 for v in infos 
+        infos = [ClipInfo(**v)
+                 for v in infos
                  if (v['vid'], v['gt_frame']) not in self.wrong_set]
         return infos
 
@@ -138,7 +142,10 @@ class EpicClipDataset(Dataset):
         obj_bbox_arrs = []
         object_masks = []
         hand_masks = []
-        for frame_idx in range(start, end+1):
+        frames = range(start, end+1) \
+            if self.sample_frames <= 0 \
+                else np.linspace(start, end, num=self.sample_frames, dtype=int)
+        for frame_idx in frames:
             image = read_epic_image(
                 vid, frame_idx, as_pil=True)
             image = image.resize(self.image_size)
@@ -158,9 +165,9 @@ class EpicClipDataset(Dataset):
             # masks
             path = f'{self.mask_dir}/{vid}/frame_{frame_idx:010d}.png'
             mask_hand, mask_obj = read_mask_with_occlusion(
-                path, 
-                out_size=self.image_size, side=side, cat=cat, 
-                crop_hand_mask=self.crop_hand_mask, 
+                path,
+                out_size=self.image_size, side=side, cat=cat,
+                crop_hand_mask=self.crop_hand_mask,
                 crop_hand_expand=HAND_MASK_KEEP_EXPAND,
                 hand_box=hand_box)
 
@@ -197,7 +204,7 @@ class CachedEpicClipDataset(EpicClipDataset):
         """
         super().__init__(*args, **kwargs)
         self.cache_dir = 'output/epic_clip_cache'
-    
+
     def __getitem__(self, index):
         with open(f'{self.cache_dir}/{index}.pkl', 'rb') as fp:
             return pickle.load(fp)
