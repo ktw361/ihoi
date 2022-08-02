@@ -11,10 +11,8 @@ from libyana.visutils import imagify
 MANO_CLOSED_FACES = np.load("homan/local_data/closed_fmano.npy")
 
 
-def compute_smooth_loss(
-    verts_hand,
-    verts_obj,
-):
+def compute_smooth_loss(verts_hand,
+                        verts_obj):
     # Assumes a single obj
     hand_nb = verts_hand.shape[0] // verts_obj.shape[0]
     time_hands = [verts_hand[hand_idx::hand_nb] for hand_idx in range(hand_nb)]
@@ -41,63 +39,21 @@ def compute_collision_loss(verts_hand,
                            faces_hand,
                            faces_object,
                            max_collisions=5000,
-                           debug=True,
-                           collision_mode="sdf"):
-    if collision_mode == "sdf":
-        hand_nb = verts_hand.shape[0] // verts_object.shape[0]
-        mano_faces = faces_object[0].new(MANO_CLOSED_FACES)
-        if hand_nb > 1:
-            mano_faces = faces_object[0].new(MANO_CLOSED_FACES[:, ::-1].copy())
-            sdfl = scenesdf.SDFSceneLoss(
-                [mano_faces, mano_faces, faces_object[0]])
-            hand_verts = [
-                verts_hand[hand_idx::2] for hand_idx in range(hand_nb)
-            ]
-            sdf_loss, sdf_meta = sdfl(hand_verts + [verts_object])
-        else:
-            sdfl = scenesdf.SDFSceneLoss([mano_faces, faces_object[0]])
-            sdf_loss, sdf_meta = sdfl([verts_hand, verts_object])
-        return {"loss_collision": sdf_loss.mean()}
+                           debug=True):
+    hand_nb = verts_hand.shape[0] // verts_object.shape[0]
+    mano_faces = faces_object[0].new(MANO_CLOSED_FACES)
+    if hand_nb > 1:
+        mano_faces = faces_object[0].new(MANO_CLOSED_FACES[:, ::-1].copy())
+        sdfl = scenesdf.SDFSceneLoss(
+            [mano_faces, mano_faces, faces_object[0]])
+        hand_verts = [
+            verts_hand[hand_idx::2] for hand_idx in range(hand_nb)
+        ]
+        sdf_loss, sdf_meta = sdfl(hand_verts + [verts_object])
     else:
-        import mesh_intersection.loss as collisions_loss
-        from mesh_intersection.bvh_search_tree import BVH
-
-        coll_loss = collisions_loss.DistanceFieldPenetrationLoss(
-            sigma=0.5, point2plane=1, vectorized=True)
-
-        batch_size = verts_hand.shape[0] // faces_hand.shape[0]
-        hand_nb = verts_hand.shape[0] // batch_size
-        hand_faces_b = [
-            faces_hand[idx % hand_nb] + verts_hand.shape[1] * idx
-            for idx in range(verts_hand.shape[0])
-        ]
-        obj_faces_b = [
-            faces_object[0] + verts_object.shape[1] * idx
-            for idx in range(verts_object.shape[0])
-        ]
-        hand_faces_b = torch.stack(hand_faces_b).long()
-        obj_faces_b = torch.stack(obj_faces_b).long()
-        hand_triangles = verts_hand.view(-1, 3)[hand_faces_b]
-        obj_triangles = verts_object.view(-1, 3)[obj_faces_b]
-        all_triangles = [
-            hand_triangles[hand_idx::hand_nb] for hand_idx in range(hand_nb)
-        ] + [obj_triangles]
-        # Group hand and object triangles into one single mesh
-        all_triangles = torch.cat(all_triangles, 1)
-
-        search_tree = BVH(max_collisions=max_collisions)
-        all_coll_idxs = []
-        if debug:
-            print("Colliding !")
-        with torch.no_grad():
-            all_coll_idxs = search_tree(all_triangles)
-        # imagify.viz_pointsrow(
-        #     [all_triangles[0].view(-1, 3)],
-        #     overlay_list=[all_triangles[0][all_coll_idxs[0]].view(1, -1, 3)])
-        colls = coll_loss(all_triangles, all_coll_idxs)
-        if (colls != colls).sum():
-            colls = torch.Tensor(0.0).float().cuda()
-        return {"loss_collision": colls.mean()}
+        sdfl = scenesdf.SDFSceneLoss([mano_faces, faces_object[0]])
+        sdf_loss, sdf_meta = sdfl([verts_hand, verts_object])
+    return {"loss_collision": sdf_loss.mean()}
 
 
 def compute_intrinsic_scale_prior(intrinsic_scales, intrinsic_mean):
