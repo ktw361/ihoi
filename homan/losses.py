@@ -9,10 +9,7 @@ from homan.constants import INTERACTION_MAPPING, REND_SIZE
 from homan.utils.bbox import compute_iou
 from homan.utils.geometry import compute_dist_z
 
-from libyana.camutils import project
 from libyana.metrics.iou import batch_mask_iou
-
-# from physim.datasets import collate
 
 
 def project_bbox(vertices, renderer, bbox_expansion=0.0):
@@ -152,7 +149,11 @@ class Losses():
                     interacting.append(0)
             return interacting
 
-    def compute_sil_loss_hand(self, verts, faces):
+    def compute_sil_loss_hand(self, 
+                              verts, 
+                              faces, 
+                              keep_dim0=False, 
+                              compute_iou=False):
         # Rendering happens in ROI
         rend = self.renderer(
             verts,
@@ -161,8 +162,14 @@ class Losses():
             mode="silhouettes")
         image = self.keep_mask_hand * rend
         loss_sil = torch.sum(
-                (image - self.ref_mask_hand)**2) / self.keep_mask_hand.sum()
-        return {"loss_sil_hand": loss_sil / len(verts)}
+            (image - self.ref_mask_hand)**2, dim=(1, 2)) # / self.keep_mask_hand.sum()
+        if not keep_dim0:
+            loss_sil = loss_sil.sum(0)
+        loss_dict = {"loss_sil_hand": loss_sil / len(verts)}
+        if compute_iou:
+            ious = batch_mask_iou(image, self.ref_mask_hand)
+            return loss_dict, ious
+        return loss_dict
 
     def compute_sil_loss_object(self, verts, faces):
         # TODO: simplify and check divide by verts?

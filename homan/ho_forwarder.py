@@ -4,6 +4,7 @@ import neural_renderer as nr
 import numpy as np
 import torch
 from torch import nn
+import matplotlib.pyplot as plt
 
 from homan import lossutils
 from homan.losses import Losses
@@ -365,6 +366,14 @@ class HOForwarder(nn.Module):
         else:
             return loss_dict
 
+    def forward_sil_hand(self):
+        verts_hand = self.get_verts_hand()
+        loss_dict, ious = self.losses.compute_sil_loss_hand(
+            verts_hand, self.faces_hand, 
+            keep_dim0=True,
+            compute_iou=True)
+        return loss_dict, ious
+    
     def forward(self, loss_weights=None, **mesh_kwargs):
         """
         If a loss weight is zero, that loss isn't computed (to avoid unnecessary
@@ -545,3 +554,19 @@ class HOForwarder(nn.Module):
             )
         )
         return np.hstack([front, left, back])
+
+    def render_grid(self):
+        l = self.bsize
+        num_cols = 5
+        num_rows = (l + num_cols - 1) // num_cols
+        fig, axes = plt.subplots(
+            nrows=num_rows, ncols=num_cols,
+            sharex=True, sharey=True, figsize=(20, 20))
+        for cam_idx, ax in enumerate(axes.flat, start=0):
+            img = self.render_scene(idx=cam_idx)
+            ax.imshow(img)
+            ax.set_axis_off()
+            if cam_idx == l-1:
+                break
+        plt.tight_layout()
+        return fig
