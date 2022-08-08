@@ -1,4 +1,4 @@
-from typing import NamedTuple
+from typing import NamedTuple, List
 import pickle
 import json
 import os.path as osp
@@ -97,7 +97,7 @@ class EpicClipDataset(Dataset):
         with open(all_boxes, 'rb') as fp:
             self.ho_boxes = pickle.load(fp)
 
-    def _read_image_sets(self, image_sets):
+    def _read_image_sets(self, image_sets) -> List[ClipInfo]:
         """
         Returns:
             list of ClipInfo(vid, nid, frame_idx, cat, side, start, end)

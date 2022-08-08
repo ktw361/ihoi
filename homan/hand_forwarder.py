@@ -7,10 +7,11 @@ from torch import nn
 import matplotlib.pyplot as plt
 
 from homan.homan_ManoModel import HomanManoModel
-from nnutils.hand_utils import ManopthWrapper
+from homan.lossutils import iou_loss, rotation_loss_v1
 from homan.utils.geometry import matrix_to_rot6d, rot6d_to_matrix
 from homan.ho_utils import (
     compute_transformation_ortho, compute_transformation_persp)
+from nnutils.hand_utils import ManopthWrapper
 
 from libzhifan.geometry import (
     SimpleMesh, visualize_mesh, projection, CameraManager)
@@ -235,7 +236,35 @@ class HandForwarder(nn.Module):
                 f"Expected hand_proj_mode {self.hand_proj_mode} to be in [ortho|persp]"
             )
 
-    def forward(self, compute_iou=True):
+    def checkpoint(self, session=0):
+        torch.save(self.state_dict(), f'/tmp/h{session}.pth')
+    
+    def resume(self, session=0):
+        self.load_state_dict(torch.load(f'/tmp/h{session}.pth'), strict=True)
+    
+    def render(self) -> torch.Tensor:
+        """ returns: (B, W, W) betwenn [0, 1] """
+        # Rendering happens in ROI
+        rend = self.renderer(
+            self.get_verts_hand(),
+            self.faces_hand,
+            K=self.camintr,
+            mode="silhouettes")
+        image = self.keep_mask_hand * rend
+        return image
+
+    def forward_pose_interp_loss(self, func='l2') -> torch.Tensor:
+        """
+        Prior: pose(t) = (pose(t+1) + pose(t-1)) / 2
+
+        Returns: (B-2,)
+        """
+        target = (self.mano_pca_pose[2:] + self.mano_pca_pose[:-2]) / 2
+        pred = self.mano_pca_pose[1:-1]
+        loss = torch.sum((target - pred)**2, dim=1)
+        return loss
+    
+    def forward_sil(self, compute_iou=True, func='l2'):
         """ 
         Returns:
             loss: torch.Tensor (B,)
@@ -248,16 +277,65 @@ class HandForwarder(nn.Module):
             K=self.camintr,
             mode="silhouettes")
         image = self.keep_mask_hand * rend
-        loss_sil = torch.sum(
-            (image - self.ref_mask_hand)**2, dim=(1, 2)) # / self.keep_mask_hand.sum()
-
-        loss_dict = {"loss_sil_hand": loss_sil / self.bsize}
-
+        if func == 'l2':
+            loss_sil = torch.sum(
+                (image - self.ref_mask_hand)**2, dim=(1, 2)) # / self.keep_mask_hand.sum()
+        elif func == 'iou':
+            loss_sil = iou_loss(image, self.ref_mask_hand)
+        
+        loss_sil = loss_sil / self.bsize
         if compute_iou:
             ious = batch_mask_iou(image, self.ref_mask_hand)
-            return loss_dict, ious
+            return loss_sil, ious
+        return loss_sil
 
-        return loss_dict
+    def forward_pca_smooth_loss(self, func='l2') -> torch.Tensor:
+        """
+        Compute smoothness based on 45-dim PCA pose.
+
+        Returns:
+            loss: (B-1,)
+        """
+        diff_pose = self.mano_pca_pose[1:] - self.mano_pca_pose[:-1]
+        if func == 'l2':
+            loss_smooth = (diff_pose**2).sum(dim=1)
+        return loss_smooth
+    
+    def forward_rot_smooth_loss(self) -> torch.Tensor:
+        rot = rot6d_to_matrix(self.rotations_hand)
+        loss = rotation_loss_v1(rot[1:], rot[:-1])
+        return loss
+
+    def forward_transl_smooth_loss(self) -> torch.Tensor:
+        d_transl = self.translations_hand[1:] - self.translations_hand[:-1]
+        loss = torch.sum(d_transl**2, dim=(1, 2))
+        return loss
+    
+    def forward(self,
+                loss_weights={
+                    'sil': 100,
+                    'pca_smooth': 0.01,
+                    'transl_smooth': 100,
+                    'rot_smooth': 100,
+                    'pca_interp': 0.01,
+                }):
+        # TODO: check adaptivity
+        l_sil = self.forward_sil(compute_iou=False, func='iou')
+        l_pca_sm = self.forward_pca_smooth_loss()
+        l_tx_sm = self.forward_transl_smooth_loss()
+        l_rot_sm = self.forward_rot_smooth_loss()
+        l_pca_inp = self.forward_pose_interp_loss()
+        losses = {
+            'sil': l_sil,
+            'pca_smooth': l_pca_sm,
+            'transl_smooth': l_tx_sm,
+            'rot_smooth': l_rot_sm,
+            'pca_interp': l_pca_inp,
+        }
+        total_loss = sum([
+            loss_weights[k] * l.sum() for k, l in losses.items()
+        ])
+        return total_loss, losses
     
     def get_meshes(self, idx, **mesh_kwargs) -> List[SimpleMesh]:
         hand_color = mesh_kwargs.pop('hand_color', 'light_blue')
@@ -303,8 +381,10 @@ class HandForwarder(nn.Module):
         return np.vstack([a,
                           b])
 
-    def render_scene(self, idx, **mesh_kwargs) -> np.ndarray:
+    def render_scene(self, idx, with_hand=True, **mesh_kwargs) -> np.ndarray:
         """ returns: (H, W, 3) """
+        if not with_hand:
+            return self.ihoi_img_patch[idx]
         mhand = self.get_meshes(idx=idx, **mesh_kwargs)
         img = projection.perspective_projection_by_camera(
             [mhand],
@@ -358,7 +438,21 @@ class HandForwarder(nn.Module):
         )
         return np.hstack([front, left, back])
 
-    def render_grid(self):
+    # def render_grid(self, with_hand=True):
+    #     l = self.bsize
+    #     num_cols = 5
+    #     num_rows = (l + num_cols - 1) // num_cols
+    #     imgs = []
+    #     for i in range(l):
+    #         img = self.render_scene(idx=i, with_hand=with_hand)
+    #         imgs.append(img)
+    #     H, W = img.shape[:2]
+    #     out = np.empty([H*num_rows, W*num_cols, 3])
+    #     for i in range(l):
+    #         row = i // num_cols
+    #         col = i % num_cols
+    #         out[H*row:H*(row+1), W*col:W*(col+1), ...] = imgs[i]
+    def render_grid(self, with_hand=True):
         l = self.bsize
         num_cols = 5
         num_rows = (l + num_cols - 1) // num_cols
@@ -366,7 +460,7 @@ class HandForwarder(nn.Module):
             nrows=num_rows, ncols=num_cols,
             sharex=True, sharey=True, figsize=(20, 20))
         for cam_idx, ax in enumerate(axes.flat, start=0):
-            img = self.render_scene(idx=cam_idx)
+            img = self.render_scene(idx=cam_idx, with_hand=with_hand)
             ax.imshow(img)
             ax.set_axis_off()
             if cam_idx == l-1:

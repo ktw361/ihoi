@@ -120,3 +120,38 @@ def compute_ordinal_depth_loss(masks:torch.Tensor,
             loss += torch.sum(torch.log(1 + torch.exp(dists))[mask])
     loss /= num_pairs
     return {"loss_depth": loss}
+
+
+def iou_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    """
+    Args:
+        pred: (B, H, W) values in [0, 1]
+        gt: (B, H, W) values in [0, 1]
+    
+    Returns:
+        loss: (B,)
+    """
+    union = pred + gt
+    inter = pred * gt
+    iou = inter.sum(dim=(1, 2)) / ((union - inter).sum(dim=(1, 2)) + 1e-7)
+    loss = 1.0 - iou
+    return loss
+
+
+def rotation_loss_v1(Ra: torch.Tensor, Rb: torch.Tensor) -> torch.Tensor:
+    """ 
+    If Ra = [Ra_x; Ra_y; Ra_z],
+    compute:
+        cos_x = <Ra_x, Rb_x>
+        loss_x = - ln((1+cos_x)/2)
+        loss = loss_x + loss_y + loss_z
+        
+    Args:
+        Ra, Rb: (B, 3, 3)
+    Returns:
+        loss: (B,) in [0, inf)
+    """
+    prod = torch.matmul(Ra.permute(0, 2, 1), Rb)
+    cos_vec = prod[..., [0, 1, 2], [0, 1, 2]]
+    loss = -1.0 * ((cos_vec + 1.0) / 2).log_()
+    return loss.sum(1)
