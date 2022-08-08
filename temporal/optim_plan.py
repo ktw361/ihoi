@@ -1,12 +1,14 @@
+from typing import Union
 import torch
 from homan.ho_forwarder import HOForwarder
+from homan.hand_forwarder import HandForwarder
 
 
 
 """ Different HO optimization plans. """
 
 
-def optimize_hand(homan: HOForwarder,
+def optimize_hand(homan: HandForwarder,
                   lr=1e-2,
                   num_steps=100,
                   verbose=True):
@@ -21,10 +23,37 @@ def optimize_hand(homan: HOForwarder,
 
     for step in range(num_steps):
         optimizer.zero_grad()
+        tot_loss, loss_dict = homan.forward()
+        # loss = loss_dict['loss_sil_hand'].sum()
+        if verbose and step % 10 == 0:
+            print(f"Step {step}, total loss = {tot_loss.item():.05f}: ", end='\n')
+            # print(iou)
+
+        tot_loss.backward()
+        optimizer.step()
+
+    return homan
+
+
+def optimize_homan_hand(homan: HOForwarder,
+                        lr=1e-2,
+                        num_steps=100,
+                        verbose=True):
+    optimizer = torch.optim.Adam([
+        {
+            'params': [homan.rotations_hand, 
+                       homan.translations_hand,
+                       homan.mano_pca_pose],
+            'lr': lr
+        }
+    ])
+
+    for step in range(num_steps):
+        optimizer.zero_grad()
         loss_dict, iou = homan.forward_sil_hand()
         loss = loss_dict['loss_sil_hand'].sum()
         if verbose and step % 10 == 0:
-            print(f"Step {step}, total loss = {loss.item():.05f}: ", end='\n')
+            print(f"Step {step}, total loss = {loss:.05f}: ", end='\n')
             print(iou)
 
         loss.backward()

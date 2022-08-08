@@ -107,6 +107,7 @@ def init_ho_forwarder(pose_machine,
     # Optimize K cluster scales
     K = 10
     obj_pose_results = pose_machine.pose_model.clustered_results(K=K)
+    # obj_pose_results = pose_machine.pose_model.fitted_results
 
     bsize = len(pose_machine)
     obj_bbox_squared = image_utils.square_bbox_xywh(
@@ -135,7 +136,7 @@ def init_ho_forwarder(pose_machine,
         mano_pca_pose = pose_machine.recover_pca_pose(),
         faces_hand = pose_machine.hand_faces,
 
-        scale_object = 1.5,
+        scale_object = 1.0,
         scale_hand = 1.0,
 
         camintr = camintr,
