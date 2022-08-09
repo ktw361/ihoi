@@ -7,6 +7,7 @@ from libzhifan.geometry import visualize_mesh, SimpleMesh
 
 
 def plot_summaries(homans) -> plt.figure:
+    raise NotImplementedError
     """ homans: list of HO_forwarder """
     l = len(homans)
     num_cols = 5

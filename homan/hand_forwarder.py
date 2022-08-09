@@ -438,20 +438,6 @@ class HandForwarder(nn.Module):
         )
         return np.hstack([front, left, back])
 
-    # def render_grid(self, with_hand=True):
-    #     l = self.bsize
-    #     num_cols = 5
-    #     num_rows = (l + num_cols - 1) // num_cols
-    #     imgs = []
-    #     for i in range(l):
-    #         img = self.render_scene(idx=i, with_hand=with_hand)
-    #         imgs.append(img)
-    #     H, W = img.shape[:2]
-    #     out = np.empty([H*num_rows, W*num_cols, 3])
-    #     for i in range(l):
-    #         row = i // num_cols
-    #         col = i % num_cols
-    #         out[H*row:H*(row+1), W*col:W*(col+1), ...] = imgs[i]
     def render_grid(self, with_hand=True):
         l = self.bsize
         num_cols = 5
