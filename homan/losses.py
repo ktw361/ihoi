@@ -5,7 +5,7 @@
 import neural_renderer as nr
 import torch
 
-from homan.constants import INTERACTION_MAPPING, REND_SIZE
+from config.epic_constants import INTERACTION_MAPPING, REND_SIZE
 from homan.utils.bbox import compute_iou
 from homan.utils.geometry import compute_dist_z
 

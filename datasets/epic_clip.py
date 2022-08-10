@@ -7,11 +7,12 @@ import torch
 
 from torch.utils.data import Dataset
 
+from config.epic_constants import HAND_MASK_KEEP_EXPAND
+from nnutils.image_utils import square_bbox
 from datasets.epic_lib.epic_utils import (
     read_epic_image, read_mask_with_occlusion)
 
-
-HAND_MASK_KEEP_EXPAND = 0.2
+from libzhifan.odlib import xyxy_to_xywh, xywh_to_xyxy
 
 epic_cats = [
     '_bg',
@@ -67,6 +68,7 @@ class EpicClipDataset(Dataset):
                  mask_dir='/home/skynet/Zhifan/data/epic_analysis/InterpV2',
                  all_boxes='/home/skynet/Zhifan/data/epic_analysis/clip_boxes.pkl',
                  image_size=(1280, 720), # (640, 360),
+                 hand_expansion=0.4,
                  crop_hand_mask=True,
                  sample_frames=20,
                  *args,
@@ -79,9 +81,10 @@ class EpicClipDataset(Dataset):
             hoa_root (str):
             mask_dir (str):
             image_size: Tuple of (W, H)
+            hand_expansion (float): size of hand bounding box after squared.
             crop_hand_mask: If True, will crop hand mask with only pixels
                 inside hand_bbox.
-            sample_frames: 
+            sample_frames:
                 whether to subsample frames to a reduced number
         """
         super().__init__(*args, **kwargs)
@@ -89,6 +92,7 @@ class EpicClipDataset(Dataset):
         self.mask_dir = mask_dir
         self.hoa_root = osp.join(epic_root, 'hoa')
         self.image_size = image_size
+        self.hand_expansion = hand_expansion
         self.crop_hand_mask = crop_hand_mask
         self.sample_frames = sample_frames
 
@@ -99,6 +103,9 @@ class EpicClipDataset(Dataset):
 
     def _read_image_sets(self, image_sets) -> List[ClipInfo]:
         """
+        Some clips with wrong bounding boxes are deleted;
+        Clips with comments (usually challenging ones) are deleted.
+
         Returns:
             list of ClipInfo(vid, nid, frame_idx, cat, side, start, end)
         """
@@ -108,13 +115,22 @@ class EpicClipDataset(Dataset):
         infos = [ClipInfo(**v)
                  for v in infos
                  if (v['vid'], v['gt_frame']) not in self.wrong_set]
+        infos = [v for v in infos if len(v.comments) == 0]
         return infos
 
     def __len__(self):
         return len(self.data_infos)
 
     def _get_hand_box(self, vid, frame_idx, side):
-        return self.ho_boxes[vid][frame_idx][side]
+        hand_box = self.ho_boxes[vid][frame_idx][side]
+        hand_box_xyxy = xywh_to_xyxy(hand_box)
+        hand_box_squared_xyxy = square_bbox(
+            hand_box_xyxy[None], pad=self.hand_expansion)[0]
+        w, h = self.image_size
+        hand_box_squared_xyxy[:2] = hand_box_squared_xyxy[:2].clip(min=[0, 0])
+        hand_box_squared_xyxy[2:] = hand_box_squared_xyxy[2:].clip(max=[w, h])
+        hand_box_squared = xyxy_to_xywh(hand_box_squared_xyxy)
+        return hand_box_squared
 
     def _get_obj_box(self, vid, frame_idx, cat):
         return self.ho_boxes[vid][frame_idx][cat]

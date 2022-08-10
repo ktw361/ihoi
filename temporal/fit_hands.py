@@ -1,5 +1,6 @@
 import argparse
 
+import cv2
 import os.path as osp
 import numpy as np
 import matplotlib.pyplot as plt
@@ -49,6 +50,14 @@ def main(args):
     info = dataset.data_infos[index]
     images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat = dataset[index]
 
+    # for i in range(len(images)):
+    #     mask = hand_masks[i]
+    #     mask[mask < 0] = 0
+    #     images[i][mask != 1, ...] = 0
+        # mask = mask[...,None].repeat(1, 1, 3).numpy().astype(np.uint8) * 255
+        # img = cv2.addWeighted(img, 0.9, mask, 0.1, 1.0)
+        # images[i] = img
+
     """ Process all hands """
     mocap_predictions = []
     for img, hand_dict in zip(images, hand_bbox_dicts):
@@ -81,7 +90,11 @@ def main(args):
     fig.savefig(save_name)
 
 
-def visualize_bboxes(images, hand_bbox_dicts, side, obj_bboxes):
+def visualize_bboxes(images, 
+                     hand_bbox_dicts, 
+                     side, 
+                     obj_bboxes,
+                     hand_masks):
     l = len(images)
     num_cols = 5
     num_rows = (l + num_cols - 1) // num_cols
@@ -89,8 +102,14 @@ def visualize_bboxes(images, hand_bbox_dicts, side, obj_bboxes):
         nrows=num_rows, ncols=num_cols,
         sharex=True, sharey=True, figsize=(20, 20))
     for idx, ax in enumerate(axes.flat, start=0):
+        img = images[idx]
+        mask = hand_masks[idx]
+        masked_img = img.copy()
+        masked_img[mask == 1, ...] = (255, 0, 0)
+        # mask = mask[..., None].repeat(1, 1, 3).numpy().astype(np.uint8) * 255
+        img = cv2.addWeighted(img, 0.8, masked_img, 0.2, 1.0)
         img = odlib.draw_bboxes_image_array(
-            images[idx], hand_bbox_dicts[idx][side][None], color='red')
+            img, hand_bbox_dicts[idx][side][None], color='red')
         odlib.draw_bboxes_image(img, obj_bboxes[idx][None], color='blue')
         img = np.asarray(img)
         ax.imshow(img)

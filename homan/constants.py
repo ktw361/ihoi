@@ -1,5 +1,7 @@
 import os.path as osp
 
+raise ValueError("Use dataset/constants.py instead.")
+
 # EXTERNAL_DIRECTORY = "./external"
 
 # Configurations for PointRend.
