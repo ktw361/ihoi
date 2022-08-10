@@ -4,14 +4,13 @@ from PIL import Image
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from config.epic_constants import HAND_MASK_KEEP_EXPAND
 from datasets.epic_lib.epic_utils import (
     read_epic_image, read_mask_with_occlusion)
 from datasets.epic_lib import epichoa
 
 
 """ Epic-Kitchens Inference Dataset """
-
-HAND_MASK_KEEP_EXPAND = 0.2
 
 
 def row2xywh(row):
