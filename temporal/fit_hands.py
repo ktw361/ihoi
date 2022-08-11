@@ -10,7 +10,7 @@ from datasets.epic_clip import EpicClipDataset
 from homan.hand_forwarder import HandForwarder, init_hand_forwarder
 from nnutils.handmocap import get_handmocap_predictor, collate_mocap_hand
 
-from temporal.optim_plan import optimize_hand
+from temporal.optim_plan import optimize_hand, smooth_hand_pose
 
 
 from libzhifan import odlib
@@ -43,8 +43,8 @@ def main(args):
     os.makedirs(args.out, exist_ok=True)
 
     dataset = EpicClipDataset(
-    image_sets='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json',
-    sample_frames=20)
+        image_sets='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json',
+        sample_frames=20)
 
     device = 'cuda'
     hand_predictor = get_handmocap_predictor()
@@ -52,6 +52,7 @@ def main(args):
     index = args.index
     info = dataset.data_infos[index]
     images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat = dataset[index]
+    print(f"Fit: {info}")
 
     overlay_mask = False
     if overlay_mask:
@@ -86,12 +87,28 @@ def main(args):
         save_name = osp.join(args.out, save_name)
         fig.savefig(save_name)
 
+    hmod = smooth_hand_pose(hmod)
     hmod = optimize_hand(hmod)
 
     fig = hmod.render_grid()
     save_name = f"{info.vid}_{info.gt_frame}.png"
     save_name = osp.join(args.out, save_name)
     fig.savefig(save_name)
+
+    fig = visualize_loss(hmod.loss_records)
+    save_name = f"{info.vid}_{info.gt_frame}_loss.png"
+    save_name = osp.join(args.out, save_name)
+    fig.savefig(save_name)
+
+
+def visualize_loss(loss_records: dict):
+    fig = plt.figure()
+    for k, v in loss_records.items():
+        plt.plot(v)
+
+    plt.legend(loss_records.keys())
+    plt.show()
+    return fig
 
 
 def visualize_bboxes(images,

@@ -323,6 +323,12 @@ class HOForwarder(nn.Module):
                 f"Expected hand_proj_mode {self.hand_proj_mode} to be in [ortho|persp]"
             )
 
+    def checkpoint(self, session=0):
+        torch.save(self.state_dict(), f'/tmp/h{session}.pth')
+    
+    def resume(self, session=0):
+        self.load_state_dict(torch.load(f'/tmp/h{session}.pth'), strict=True)
+
     def compute_ordinal_depth_loss(self, 
                                    verts_hand,
                                    verts_object,

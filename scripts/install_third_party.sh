@@ -28,3 +28,9 @@ mkdir -p external
 git clone https://github.com/hassony2/multiperson.git externals/multiperson
 pip install externals/multiperson/neural_renderer
 pip install externals/multiperson/sdf
+
+
+# install Roma rotation library
+git clone https://github.com/naver/roma externals/roma
+cd externals/roma && git checkout 22806dfb43329b9bf1dd2cead7e96720330e3151
+pip install externals/roma

@@ -13,6 +13,7 @@ from homan.ho_utils import (
     compute_transformation_ortho, compute_transformation_persp)
 from nnutils.hand_utils import ManopthWrapper
 
+import roma
 from libzhifan.geometry import (
     SimpleMesh, visualize_mesh, projection, CameraManager)
 from libzhifan.numeric import check_shape
@@ -253,17 +254,6 @@ class HandForwarder(nn.Module):
         image = self.keep_mask_hand * rend
         return image
 
-    def forward_pose_interp_loss(self, func='l2') -> torch.Tensor:
-        """
-        Prior: pose(t) = (pose(t+1) + pose(t-1)) / 2
-
-        Returns: (B-2,)
-        """
-        target = (self.mano_pca_pose[2:] + self.mano_pca_pose[:-2]) / 2
-        pred = self.mano_pca_pose[1:-1]
-        loss = torch.sum((target - pred)**2, dim=1)
-        return loss
-    
     def forward_sil(self, compute_iou=True, func='l2'):
         """ 
         Returns:
@@ -289,52 +279,55 @@ class HandForwarder(nn.Module):
             return loss_sil, ious
         return loss_sil
 
-    def forward_pca_smooth_loss(self, func='l2') -> torch.Tensor:
+    def loss_pose_interpolation(self) -> torch.Tensor:
         """
-        Compute smoothness based on 45-dim PCA pose.
+        Prior: pose(t) = (pose(t+1) + pose(t-1)) / 2
 
-        Returns:
-            loss: (B-1,)
+        Returns: (B-2,)
         """
-        diff_pose = self.mano_pca_pose[1:] - self.mano_pca_pose[:-1]
-        if func == 'l2':
-            loss_smooth = (diff_pose**2).sum(dim=1)
-        return loss_smooth
-    
-    def forward_rot_smooth_loss(self) -> torch.Tensor:
-        rot = rot6d_to_matrix(self.rotations_hand)
-        loss = rotation_loss_v1(rot[1:], rot[:-1])
+        target = (self.mano_pca_pose[2:] + self.mano_pca_pose[:-2]) / 2
+        pred = self.mano_pca_pose[1:-1]
+        loss = torch.mean((target - pred)**2, dim=(1))
         return loss
 
-    def forward_transl_smooth_loss(self) -> torch.Tensor:
-        d_transl = self.translations_hand[1:] - self.translations_hand[:-1]
-        loss = torch.sum(d_transl**2, dim=(1, 2))
+    def loss_rot_interpolation(self) -> torch.Tensor:
+        device = self.rotations_hand.device
+        rotmat = rot6d_to_matrix(self.rotations_hand)
+        rot_mid = roma.rotmat_slerp(
+            rotmat[2:], rotmat[:-2],
+            torch.as_tensor([0.5], device=device))[0]
+        loss = rotation_loss_v1(rot_mid, rotmat[1:-1])
+        return loss
+
+    def loss_transl_interpolation(self) -> torch.Tensor:
+        """
+        Returns: (B-2,)
+        """
+        interp = (self.translations_hand[2:] + self.translations_hand[:-2]) / 2
+        pred = self.translations_hand[1:-1]
+        loss = torch.sum((interp - pred)**2, dim=(1, 2))
         return loss
     
     def forward(self,
                 loss_weights={
-                    'sil': 100,
-                    'pca_smooth': 0.01,
-                    'transl_smooth': 100,
-                    'rot_smooth': 100,
-                    'pca_interp': 0.01,
+                    'sil': 1,
+                    'pca': 1,
+                    'rot': 1,
+                    'transl': 1,
                 }):
-        # TODO: check adaptivity
-        l_sil = self.forward_sil(compute_iou=False, func='iou')
-        l_pca_sm = self.forward_pca_smooth_loss()
-        l_tx_sm = self.forward_transl_smooth_loss()
-        l_rot_sm = self.forward_rot_smooth_loss()
-        l_pca_inp = self.forward_pose_interp_loss()
+        l_sil = self.forward_sil(compute_iou=False, func='iou').sum()
+        l_pca = self.loss_pose_interpolation().sum()
+        l_rot = self.loss_rot_interpolation().sum()
+        l_transl = self.loss_transl_interpolation().sum()
         losses = {
             'sil': l_sil,
-            'pca_smooth': l_pca_sm,
-            'transl_smooth': l_tx_sm,
-            'rot_smooth': l_rot_sm,
-            'pca_interp': l_pca_inp,
+            'pca': l_pca,
+            'rot': l_rot,
+            'transl': l_transl,
         }
-        total_loss = sum([
-            loss_weights[k] * l.sum() for k, l in losses.items()
-        ])
+        for k, l in losses.items():
+            losses[k] = l * loss_weights[k]
+        total_loss = sum([v for v in losses.values()])
         return total_loss, losses
     
     def get_meshes(self, idx, **mesh_kwargs) -> List[SimpleMesh]:

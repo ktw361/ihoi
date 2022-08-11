@@ -129,12 +129,13 @@ def iou_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
         gt: (B, H, W) values in [0, 1]
     
     Returns:
-        loss: (B,)
+        loss: (B,) in [0, inf)
     """
     union = pred + gt
     inter = pred * gt
     iou = inter.sum(dim=(1, 2)) / ((union - inter).sum(dim=(1, 2)) + 1e-7)
-    loss = 1.0 - iou
+    # loss = 1.0 - iou
+    loss = - iou.log_()
     return loss
 
 

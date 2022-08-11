@@ -1,6 +1,7 @@
 import argparse
 
 import cv2
+import os
 import os.path as osp
 import torch
 import numpy as np
@@ -43,8 +44,8 @@ def main(args):
     os.makedirs(args.out, exist_ok=True)
 
     dataset = EpicClipDataset(
-    image_sets='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json',
-    sample_frames=20)
+        image_sets='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json',
+        sample_frames=20)
 
     device = 'cuda'
     hand_predictor = get_handmocap_predictor()
@@ -52,6 +53,7 @@ def main(args):
     index = args.index
     info = dataset.data_infos[index]
     images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat = dataset[index]
+    print(f"Jitter: {info}")
 
     """ Process all hands """
     mocap_predictions = []
