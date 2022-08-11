@@ -1,7 +1,6 @@
 import argparse
 
 import cv2
-import os
 import os.path as osp
 import torch
 import numpy as np
@@ -11,6 +10,7 @@ from homan.hand_forwarder import HandForwarder, init_hand_forwarder
 from nnutils.handmocap import get_handmocap_predictor, collate_mocap_hand
 
 from temporal.optim_plan import optimize_hand
+from temporal.utils import jitter_box, median_vector_index
 
 
 from libzhifan import odlib
@@ -53,21 +53,21 @@ def main(args):
     info = dataset.data_infos[index]
     images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat = dataset[index]
 
-    overlay_mask = False
-    if overlay_mask:
-        for i in range(len(images)):
-            masked_img = images[i].copy()
-            masked_img[hand_masks[i] == 1, ...] = (255, 255, 255)
-            img = cv2.addWeighted(images[i], 0.9, masked_img, 0.1, 1.0)
-            images[i] = img
-
     """ Process all hands """
     mocap_predictions = []
     for img, hand_dict in zip(images, hand_bbox_dicts):
-        mocap_pred = hand_predictor.regress(
-            img[..., ::-1], [hand_dict]
+        boxes = jitter_box(hand_dict[side], ratio=0.005, num=5)
+        hand_dict_list = []
+        for box in boxes:
+            hand_dict_list.append({side: box})
+            
+        mocap_pred_list = hand_predictor.regress(
+            img[..., ::-1], hand_dict_list
         )
-        mocap_predictions += mocap_pred
+        poses = np.concatenate(
+            [v[side]['pred_hand_pose'] for v in mocap_pred_list], axis=0)
+        ind = median_vector_index(torch.as_tensor(poses))
+        mocap_predictions.append(mocap_pred_list[ind])
     one_hands = collate_mocap_hand(mocap_predictions, side)
 
     if args.show_bbox:

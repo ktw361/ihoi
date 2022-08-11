@@ -121,8 +121,10 @@ class EpicClipDataset(Dataset):
     def __len__(self):
         return len(self.data_infos)
 
-    def _get_hand_box(self, vid, frame_idx, side):
+    def _get_hand_box(self, vid, frame_idx, side, expand=True):
         hand_box = self.ho_boxes[vid][frame_idx][side]
+        if not expand:
+            return hand_box
         hand_box_xyxy = xywh_to_xyxy(hand_box)
         hand_box_squared_xyxy = square_bbox(
             hand_box_xyxy[None], pad=self.hand_expansion)[0]
@@ -141,7 +143,7 @@ class EpicClipDataset(Dataset):
             images: ndarray (N, H, W, 3) RGB
                 note frankmocap requires `BGR` input
             hand_bbox_dicts: list of dict
-                - left_hand/right_hand: ndarray (4,) of (x1, y1, w, h)
+                - left_hand/right_hand: ndarray (4,) of (x0, y0, w, h)
             obj_bbox_arrs: (N, 4) xywh
             object_masks: (N, H, W)
                 - fg: 1, ignore -1, bg 0
@@ -185,7 +187,7 @@ class EpicClipDataset(Dataset):
                 out_size=self.image_size, side=side, cat=cat,
                 crop_hand_mask=self.crop_hand_mask,
                 crop_hand_expand=HAND_MASK_KEEP_EXPAND,
-                hand_box=hand_box)
+                hand_box=self._get_hand_box(vid, frame_idx, side, expand=False))
 
             images.append(image)
             hand_bbox_dicts.append(hand_bbox_dict)
@@ -200,30 +202,6 @@ class EpicClipDataset(Dataset):
         object_masks = torch.as_tensor(object_masks)
 
         return images, hand_bbox_dicts, side_return, obj_bbox_arrs, hand_masks, object_masks, cat
-
-
-class CachedEpicClipDataset(EpicClipDataset):
-
-    def __init__(self,
-                 *args,
-                 **kwargs):
-        """_summary_
-
-        Args:
-            image_sets (str): path to clean set frames
-            epic_root (str):
-            hoa_root (str):
-            mask_dir (str):
-            image_size: Tuple of (W, H)
-            crop_hand_mask: If True, will crop hand mask with only pixels
-                inside hand_bbox.
-        """
-        super().__init__(*args, **kwargs)
-        self.cache_dir = 'output/epic_clip_cache'
-
-    def __getitem__(self, index):
-        with open(f'{self.cache_dir}/{index}.pkl', 'rb') as fp:
-            return pickle.load(fp)
 
 
 if __name__ == '__main__':
