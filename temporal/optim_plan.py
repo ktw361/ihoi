@@ -8,29 +8,75 @@ from homan.hand_forwarder import HandForwarder
 """ Different HO optimization plans. """
 
 
+def smooth_hand_pose(homan: HandForwarder,
+                     lr=1e-2,
+                     thresh=1e-3,
+                     verbose=True):
+    optimizer = torch.optim.Adam([
+        {
+            'params': [
+                homan.mano_pca_pose
+            ],
+            'lr': lr
+        }
+    ])
+
+    max_steps = 500
+    for _ in range(max_steps):
+        optimizer.zero_grad()
+        pca_loss = homan.loss_pose_interpolation().sum()
+        if pca_loss < thresh:
+            break
+        pca_loss.backward()
+        optimizer.step()
+
+    return homan
+
+
 def optimize_hand(homan: HandForwarder,
                   lr=1e-2,
                   num_steps=100,
                   verbose=True):
     optimizer = torch.optim.Adam([
         {
-            'params': [homan.rotations_hand, 
-                       homan.translations_hand,
-                       homan.mano_pca_pose],
+            'params': [
+                homan.rotations_hand,
+                homan.translations_hand,
+                # homan.mano_pca_pose
+            ],
             'lr': lr
         }
     ])
 
+    loss_weights = {
+        'sil': 1,
+        'pca': 0,
+        'rot': 1,
+        'transl': 1,
+    }
+    loss_records = {
+        'total': [],
+        'sil': [],
+        'pca': [],
+        'rot': [],
+        'transl': [],
+    }
     for step in range(num_steps):
         optimizer.zero_grad()
         tot_loss, loss_dict = homan.forward()
-        # loss = loss_dict['loss_sil_hand'].sum()
         if verbose and step % 10 == 0:
-            print(f"Step {step}, total loss = {tot_loss.item():.05f}: ", end='\n')
-            # print(iou)
+            print(f"Step {step}, tot = {tot_loss.item():.04f}, ", end=' ')
+            for k, v in loss_dict.items():
+                print(f"{k} = {v.item():.04f}", end=' ')
+            print()
+        loss_records['total'].append(tot_loss.item())
+        for k, v in loss_dict.items():
+            loss_records[k].append(v.item())
 
         tot_loss.backward()
         optimizer.step()
+    
+    homan.loss_records = loss_records
 
     return homan
 
