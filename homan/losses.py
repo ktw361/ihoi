@@ -8,6 +8,7 @@ import torch
 from config.epic_constants import INTERACTION_MAPPING, REND_SIZE
 from homan.utils.bbox import compute_iou
 from homan.utils.geometry import compute_dist_z
+from homan.lossutils import iou_loss
 
 from libyana.metrics.iou import batch_mask_iou
 
@@ -84,6 +85,7 @@ class Losses():
             inter_type (str): [centroid|min] centroid to penalize centroid distances
                 min to penalize minimum distance
         """
+        self.bsize = len(camintr)
         self.renderer = nr.renderer.Renderer(image_size=REND_SIZE,
                                              K=renderer.K,
                                              R=renderer.R,
@@ -151,21 +153,27 @@ class Losses():
 
     def compute_sil_loss_hand(self, 
                               verts, 
-                              faces, 
-                              keep_dim0=False, 
-                              compute_iou=False):
-        # Rendering happens in ROI
+                              faces,
+                              compute_iou=False,
+                              func='l2'): 
+        """
+        Returns:
+            {loss_sil_hand: (B,) }
+        """
         rend = self.renderer(
             verts,
             faces,
             K=self.camintr,
             mode="silhouettes")
         image = self.keep_mask_hand * rend
-        loss_sil = torch.sum(
-            (image - self.ref_mask_hand)**2, dim=(1, 2)) # / self.keep_mask_hand.sum()
-        if not keep_dim0:
-            loss_sil = loss_sil.sum(0)
-        loss_dict = {"loss_sil_hand": loss_sil / len(verts)}
+        if func == 'l2':
+            loss_sil = torch.sum(
+                (image - self.ref_mask_hand)**2, dim=(1, 2)) # / self.keep_mask_hand.sum()
+        elif func == 'iou':
+            loss_sil = iou_loss(image, self.ref_mask_hand)
+        
+        loss_sil = loss_sil / self.bsize
+        loss_dict = {"sil_hand": loss_sil}
         if compute_iou:
             ious = batch_mask_iou(image, self.ref_mask_hand)
             return loss_dict, ious
@@ -228,7 +236,7 @@ class Losses():
             loss_inter = loss_inter
         min_dists = torch.stack(min_dists).min(0)[0]
         return {
-            "loss_inter": loss_inter
+            "inter": loss_inter
         }, {
             "handobj_maxdist": torch.max(min_dists).item()
         }

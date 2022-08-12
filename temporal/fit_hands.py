@@ -1,5 +1,6 @@
 import argparse
 
+import tqdm
 import cv2
 import os
 import os.path as osp
@@ -40,16 +41,31 @@ def get_args():
 
 
 def main(args):
-    os.makedirs(args.out, exist_ok=True)
-
     dataset = EpicClipDataset(
         image_sets='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json',
         sample_frames=20)
-
-    device = 'cuda'
     hand_predictor = get_handmocap_predictor()
+    if args.index >= 0:
+        fit_scene(dataset, hand_predictor, args.index,
+                  args.out, args.show_bbox, args.show_before)
+        return
+    
+    for index in tqdm.trange(len(dataset)):
+        try:
+            fit_scene(dataset, hand_predictor, index,
+                    args.out, args.show_bbox, args.show_before)
+        except:
+            continue
 
-    index = args.index
+
+def fit_scene(dataset, 
+              hand_predictor,
+              index: int, 
+              out_dir: str,
+              show_bbox=False,
+              show_before=False):
+    os.makedirs(out_dir, exist_ok=True)
+
     info = dataset.data_infos[index]
     images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat = dataset[index]
     print(f"Fit: {info}")
@@ -71,20 +87,20 @@ def main(args):
         mocap_predictions += mocap_pred
     one_hands = collate_mocap_hand(mocap_predictions, side)
 
-    if args.show_bbox:
+    if show_bbox:
         fig = visualize_bboxes(
             images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks)
         save_name = f"{info.vid}_{info.gt_frame}_bbox.png"
-        save_name = osp.join(args.out, save_name)
+        save_name = osp.join(out_dir, save_name)
         fig.savefig(save_name)
 
     hmod = init_hand_forwarder(one_hands, images, side, obj_bboxes, hand_masks)
     # hmod.checkpoint()
 
-    if args.show_before:
+    if show_before:
         fig = hmod.render_grid()
         save_name = f"{info.vid}_{info.gt_frame}_before.png"
-        save_name = osp.join(args.out, save_name)
+        save_name = osp.join(out_dir, save_name)
         fig.savefig(save_name)
 
     hmod = smooth_hand_pose(hmod)
@@ -92,12 +108,12 @@ def main(args):
 
     fig = hmod.render_grid()
     save_name = f"{info.vid}_{info.gt_frame}.png"
-    save_name = osp.join(args.out, save_name)
+    save_name = osp.join(out_dir, save_name)
     fig.savefig(save_name)
 
     fig = visualize_loss(hmod.loss_records)
     save_name = f"{info.vid}_{info.gt_frame}_loss.png"
-    save_name = osp.join(args.out, save_name)
+    save_name = osp.join(out_dir, save_name)
     fig.savefig(save_name)
 
 
