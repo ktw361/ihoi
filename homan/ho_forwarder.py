@@ -12,6 +12,8 @@ from homan.homan_ManoModel import HomanManoModel
 from homan.utils.geometry import matrix_to_rot6d, rot6d_to_matrix
 from homan.ho_utils import (
     compute_transformation_ortho, compute_transformation_persp)
+from homan.lossutils import rotation_loss_v1
+import roma
 
 from libzhifan.geometry import (
     SimpleMesh, visualize_mesh, projection, CameraManager)
@@ -372,13 +374,43 @@ class HOForwarder(nn.Module):
         else:
             return loss_dict
 
-    def forward_sil_hand(self):
+    def loss_sil_hand(self):
         verts_hand = self.get_verts_hand()
         loss_dict, ious = self.losses.compute_sil_loss_hand(
             verts_hand, self.faces_hand, 
-            keep_dim0=True,
-            compute_iou=True)
-        return loss_dict, ious
+            compute_iou=False, func='iou')
+        loss_sil = loss_dict['sil_hand']
+        return loss_sil
+
+    def loss_pose_interpolation(self) -> torch.Tensor:
+        """
+        Interpolation Prior: pose(t) = (pose(t+1) + pose(t-1)) / 2
+
+        Returns: (B-2,)
+        """
+        target = (self.mano_pca_pose[2:] + self.mano_pca_pose[:-2]) / 2
+        pred = self.mano_pca_pose[1:-1]
+        loss = torch.mean((target - pred)**2, dim=(1))
+        return loss
+
+    def loss_hand_rot(self) -> torch.Tensor:
+        """ Interpolation loss for hand rotation """
+        device = self.rotations_hand.device
+        rotmat = rot6d_to_matrix(self.rotations_hand)
+        rot_mid = roma.rotmat_slerp(
+            rotmat[2:], rotmat[:-2],
+            torch.as_tensor([0.5], device=device))[0]
+        loss = rotation_loss_v1(rot_mid, rotmat[1:-1])
+        return loss
+
+    def loss_hand_transl(self) -> torch.Tensor:
+        """
+        Returns: (B-2,)
+        """
+        interp = (self.translations_hand[2:] + self.translations_hand[:-2]) / 2
+        pred = self.translations_hand[1:-1]
+        loss = torch.sum((interp - pred)**2, dim=(1, 2))
+        return loss
     
     def forward(self, loss_weights=None, **mesh_kwargs):
         """
@@ -392,10 +424,10 @@ class HOForwarder(nn.Module):
         # coarse interaction loss simply in translation
         verts_hand = self.get_verts_hand(**mesh_kwargs)
         verts_hand_det_scale = self.get_verts_hand(detach_scale=True)
-        if loss_weights is None or loss_weights["lw_pca"] > 0:
+        if loss_weights is None or loss_weights["pca"] > 0:
             loss_pca = lossutils.compute_pca_loss(self.mano_pca_pose)
             loss_dict.update(loss_pca)
-        if loss_weights is None or loss_weights["lw_collision"] > 0:
+        if loss_weights is None or loss_weights["collision"] > 0:
             # Pushes hand out of object, gradient not flowing through object !
             loss_coll = lossutils.compute_collision_loss(
                 verts_hand=verts_hand_det_scale,
@@ -404,24 +436,24 @@ class HOForwarder(nn.Module):
                 faces_hand=self.faces_hand)
             loss_dict.update(loss_coll)
 
-        if loss_weights is None or loss_weights["lw_contact"] > 0:
+        if loss_weights is None or loss_weights["contact"] > 0:
             loss_contact, _ = lossutils.compute_contact_loss(
                 verts_hand_b=verts_hand_det_scale,
                 verts_object_b=verts_object,
                 faces_object=self.faces_object,
                 faces_hand=self.faces_hand)
             loss_dict.update(loss_contact)
-        if loss_weights is None or loss_weights["lw_sil_obj"] > 0:
+        if loss_weights is None or loss_weights["sil_obj"] > 0:
             sil_loss_dict, sil_metric_dict = self.losses.compute_sil_loss_object(
                 verts=verts_object, faces=self.faces_object)
             loss_dict.update(sil_loss_dict)
             metric_dict.update(sil_metric_dict)
 
-        if loss_weights is None or loss_weights['lw_sil_hand'] > 0:
+        if loss_weights is None or loss_weights['sil_hand'] > 0:
             loss_dict.update(
                 self.losses.compute_sil_loss_hand(verts=verts_hand,
                                                   faces=self.faces_hand))
-        if loss_weights is None or loss_weights["lw_inter"] > 0:
+        if loss_weights is None or loss_weights["inter"] > 0:
             # Interaction acts only on hand !
             inter_verts_object = verts_object.unsqueeze(1)
             verts_hand_b=verts_hand.view(-1, self.hand_nb, 778, 3)
@@ -432,19 +464,19 @@ class HOForwarder(nn.Module):
             loss_dict.update(inter_loss_dict)
             metric_dict.update(inter_metric_dict)
 
-        if loss_weights is None or loss_weights["lw_scale_obj"] > 0:
+        if loss_weights is None or loss_weights["scale_obj"] > 0:
             loss_dict[
                 "loss_scale_obj"] = lossutils.compute_intrinsic_scale_prior(
                     intrinsic_scales=self.scale_object,
                     intrinsic_mean=self.int_scale_object_mean,
                 )
-        if loss_weights is None or loss_weights["lw_scale_hand"] > 0:
+        if loss_weights is None or loss_weights["scale_hand"] > 0:
             loss_dict[
                 "loss_scale_hand"] = lossutils.compute_intrinsic_scale_prior(
                     intrinsic_scales=self.scale_hand,
                     intrinsic_mean=self.int_scale_hand_mean,
                 )
-        if loss_weights is None or loss_weights["lw_depth"] > 0:
+        if loss_weights is None or loss_weights["depth"] > 0:
             loss_dict.update(self.compute_ordinal_depth_loss(
                 verts_hand, verts_object, **mesh_kwargs))
         return loss_dict, metric_dict

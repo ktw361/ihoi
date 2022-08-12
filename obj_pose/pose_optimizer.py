@@ -65,6 +65,8 @@ class PoseOptimizer:
                  ihoi_box_expand=1.0,
                  rend_size=REND_SIZE,
                  device='cuda',
+                 hand_rotation=None,
+                 hand_translation=None,
                  ):
         """
         Args:
@@ -90,8 +92,12 @@ class PoseOptimizer:
         _hand_bbox_proc = one_hand['bbox_processed']
         rot_axisang, _pred_hand_pose = _pred_hand_pose[:, :3], _pred_hand_pose[:, 3:]
 
-        self._hand_rotation, self._hand_translation = self._compute_hand_transform(
-            rot_axisang, _pred_hand_pose, pred_camera)
+        if hand_rotation is not None and hand_translation is not None:
+            self._hand_rotation = hand_rotation
+            self._hand_translation = hand_translation
+        else:
+            self._hand_rotation, self._hand_translation = self._compute_hand_transform(
+                rot_axisang, _pred_hand_pose, pred_camera)
         _hand_verts_orig, _hand_verts, hand_cam, global_cam = self._calc_hand_mesh(
             _pred_hand_pose, _pred_hand_betas,
             _hand_bbox_proc

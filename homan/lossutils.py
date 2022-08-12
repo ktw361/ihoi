@@ -13,25 +13,11 @@ MANO_CLOSED_FACES = np.load("homan/local_data/closed_fmano.npy")
 
 def compute_smooth_loss(verts_hand,
                         verts_obj):
-    # Assumes a single obj
-    hand_nb = verts_hand.shape[0] // verts_obj.shape[0]
-    time_hands = [verts_hand[hand_idx::hand_nb] for hand_idx in range(hand_nb)]
-    all_hand_verts = torch.cat(time_hands, 1)
-    # from libyana.visutils import imagify
-    # imagify.viz_pointsrow(all_hand_verts, "tmp.png")
-    # imagify.viz_pointsrow(all_hand_verts[:, :, 1:], "tmpz.png")
-    # import pudb
-    # pu.db
-    smooth_loss_hand = ((all_hand_verts[1:] - all_hand_verts[:-1])**2).mean()
-    smooth_loss_obj = ((verts_obj[1:] - verts_obj[:-1])**2).mean()
-    return {
-        "loss_smooth_obj": smooth_loss_obj,
-        "loss_smooth_hand": smooth_loss_hand
-    }
+    raise NotImplementedError
 
 
 def compute_pca_loss(mano_pca_comps):
-    return {"loss_pca": (mano_pca_comps**2).mean()}
+    return {"pca_mean": (mano_pca_comps**2).mean()}
 
 
 def compute_collision_loss(verts_hand,
@@ -53,7 +39,7 @@ def compute_collision_loss(verts_hand,
     else:
         sdfl = scenesdf.SDFSceneLoss([mano_faces, faces_object[0]])
         sdf_loss, sdf_meta = sdfl([verts_hand, verts_object])
-    return {"loss_collision": sdf_loss.mean()}
+    return {"collision": sdf_loss.mean()}
 
 
 def compute_intrinsic_scale_prior(intrinsic_scales, intrinsic_mean):
@@ -79,7 +65,7 @@ def compute_contact_loss(verts_hand_b, verts_object_b, faces_object,
     else:
         missed_loss, contact_loss, _, _ = contactloss.compute_contact_loss(
             verts_hand_b, faces_hand_closed, verts_object_b, faces_object)
-    return {"loss_contact": missed_loss + contact_loss}, None
+    return {"contact": missed_loss + contact_loss}, None
 
 
 def compute_ordinal_depth_loss(masks:torch.Tensor, 
@@ -119,7 +105,7 @@ def compute_ordinal_depth_loss(masks:torch.Tensor,
             dists = torch.clamp(depths[i] - depths[j], min=0.0, max=2.0)
             loss += torch.sum(torch.log(1 + torch.exp(dists))[mask])
     loss /= num_pairs
-    return {"loss_depth": loss}
+    return {"depth": loss}
 
 
 def iou_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
