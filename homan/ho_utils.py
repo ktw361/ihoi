@@ -67,10 +67,10 @@ def compute_transformation_ortho(meshes,
     return verts_final
 
 
-def compute_transformation_persp(meshes,
+def compute_transformation_persp(meshes: torch.Tensor,
                                  translations,
                                  rotations=None,
-                                 intrinsic_scales=None):
+                                 intrinsic_scales=None) -> torch.Tensor:
     """
     Computes the 3D transformation.
 

@@ -41,7 +41,6 @@ class HOForwarder(nn.Module):
 
                  translations_hand,  # (B, 3)
                  rotations_hand,
-                 verts_hand_og,
                  hand_sides,
                  mano_trans,
                  mano_rot,
@@ -53,13 +52,9 @@ class HOForwarder(nn.Module):
                  target_masks_object,
                  target_masks_hand,
                  class_name='default',
-                 cams_hand=None,
                  scale_hand=1.0,
                  scale_object=1.0,
-                 optimize_ortho_cam=True,
                  hand_proj_mode="persp",
-                 optimize_mano=True,
-                 optimize_mano_beta=True,
                  inter_type="centroid",
                  image_size:int = 640,
 
@@ -70,7 +65,6 @@ class HOForwarder(nn.Module):
         (h_{hand_index}_t_{time_step})
 
         Args:
-            verts_hand_og: Transformed hands TODO(check)
             target_masks_object: used as ref_mask_obj
             target_masks_hand: used as _ref_mask_hand
             camintr_rois_object: from model.K.detach(),
@@ -114,33 +108,18 @@ class HOForwarder(nn.Module):
         if rotations_hand.shape[-1] == 3:
             rotations_hand = matrix_to_rot6d(rotations_hand)
         self.rotations_hand = nn.Parameter(rotations_hand, requires_grad=True)
-        if optimize_ortho_cam:
-            self.cams_hand = nn.Parameter(cams_hand, requires_grad=True)
-        else:
-            self.register_buffer("cams_hand", cams_hand)
         self.hand_sides = hand_sides
         self.hand_nb = len(hand_sides)
 
-        self.optimize_mano = optimize_mano
-        if optimize_mano:
-            self.mano_pca_pose = nn.Parameter(mano_pca_pose,
-                                              requires_grad=True)
-            self.mano_rot = nn.Parameter(mano_rot, requires_grad=True)
-            self.mano_trans = nn.Parameter(mano_trans, requires_grad=True)
-        else:
-            self.register_buffer("mano_pca_pose", mano_pca_pose)
-            self.register_buffer("mano_rot", mano_rot)
-        if optimize_mano_beta:
-            self.mano_betas = nn.Parameter(torch.zeros_like(mano_betas),
-                                           requires_grad=True)
-            self.register_buffer("scale_hand",
-                                 torch.as_tensor([scale_hand]))
-        else:
-            self.register_buffer("mano_betas", torch.zeros_like(mano_betas))
-            self.scale_hand = nn.Parameter(
-                scale_hand * torch.ones(1).float(),
-                requires_grad=True)
-        self.register_buffer("verts_hand_og", verts_hand_og)
+        self.mano_pca_pose = nn.Parameter(mano_pca_pose, requires_grad=True)
+        self.mano_rot = nn.Parameter(mano_rot, requires_grad=True)
+        self.mano_trans = nn.Parameter(mano_trans, requires_grad=True)
+        self.mano_betas = nn.Parameter(torch.zeros_like(mano_betas),
+                                        requires_grad=True)
+        self.scale_hand = nn.Parameter(
+            scale_hand * torch.ones(1).float(),
+            requires_grad=True)
+
         self.register_buffer("int_scale_hand_mean",
                              torch.Tensor([1.0]).float().cuda())
         self.register_buffer("ref_mask_object",
@@ -282,23 +261,20 @@ class HOForwarder(nn.Module):
         )
 
     def get_verts_hand(self, detach_scale=False, **kwargs):
-        if self.optimize_mano:
-            all_hand_verts = []
-            for hand_idx, side in enumerate(self.hand_sides):
-                mano_pca_pose = self.mano_pca_pose[hand_idx::self.hand_nb]
-                mano_rot = self.mano_rot[hand_idx::self.hand_nb]
-                mano_res = self.mano_model.forward_pca(
-                    mano_pca_pose,
-                    rot=mano_rot,
-                    betas=self.mano_betas[hand_idx::self.hand_nb],
-                    side=side)
-                vertices = mano_res["verts"]
-                all_hand_verts.append(vertices)
-            all_hand_verts = torch.stack(all_hand_verts).transpose(
-                0, 1).contiguous().view(-1, 778, 3)
-            verts_hand_og = all_hand_verts + self.mano_trans.unsqueeze(1)
-        else:
-            verts_hand_og = self.verts_hand_og
+        all_hand_verts = []
+        for hand_idx, side in enumerate(self.hand_sides):
+            mano_pca_pose = self.mano_pca_pose[hand_idx::self.hand_nb]
+            mano_rot = self.mano_rot[hand_idx::self.hand_nb]
+            mano_res = self.mano_model.forward_pca(
+                mano_pca_pose,
+                rot=mano_rot,
+                betas=self.mano_betas[hand_idx::self.hand_nb],
+                side=side)
+            vertices = mano_res["verts"]
+            all_hand_verts.append(vertices)
+        all_hand_verts = torch.stack(all_hand_verts).transpose(
+            0, 1).contiguous().view(-1, 778, 3)
+        verts_hand_og = all_hand_verts + self.mano_trans.unsqueeze(1)
         if detach_scale:
             scale = self.scale_hand.detach()
         else:

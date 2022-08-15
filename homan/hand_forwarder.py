@@ -6,6 +6,7 @@ import torch
 from torch import nn
 import matplotlib.pyplot as plt
 
+from nnutils.handmocap import recover_pca_pose
 from homan.homan_ManoModel import HomanManoModel
 from homan.lossutils import iou_loss, rotation_loss_v1
 from homan.utils.geometry import matrix_to_rot6d, rot6d_to_matrix
@@ -279,7 +280,7 @@ class HandForwarder(nn.Module):
             return loss_sil, ious
         return loss_sil
 
-    def loss_pose_interpolation(self) -> torch.Tensor:
+    def loss_pca_interpolation(self) -> torch.Tensor:
         """
         Prior: pose(t) = (pose(t+1) + pose(t-1)) / 2
 
@@ -308,6 +309,9 @@ class HandForwarder(nn.Module):
         loss = torch.sum((interp - pred)**2, dim=(1, 2))
         return loss
     
+    def forward_hand(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+    
     def forward(self,
                 loss_weights={
                     'sil': 1,
@@ -316,7 +320,7 @@ class HandForwarder(nn.Module):
                     'transl': 1,
                 }):
         l_sil = self.forward_sil(compute_iou=False, func='iou').sum()
-        l_pca = self.loss_pose_interpolation().sum()
+        l_pca = self.loss_pca_interpolation().sum()
         l_rot = self.loss_rot_interpolation().sum()
         l_transl = self.loss_transl_interpolation().sum()
         losses = {
@@ -453,20 +457,14 @@ def init_hand_forwarder(one_hands,
                         side: str, 
                         obj_bboxes,
                         hand_masks) -> HandForwarder:
-    if 'left' in side:
-        hand_wrapper_flat = __hand_wrapper_left
-    elif 'right' in side:
-        hand_wrapper_flat = __hand_wrapper_right
-    else:
-        raise ValueError
     pose_machine = PoseOptimizer(
-        one_hands, obj_loader=None, hand_wrapper=hand_wrapper_flat)
+        one_hands, obj_loader=None, side=side)
 
     _, image_patch, hand_mask_patch = pose_machine.finalize_without_fit(
         images, obj_bboxes, hand_masks)
 
     bsize = len(pose_machine)
-    mano_pca_pose = pose_machine.recover_pca_pose()
+    mano_pca_pose = recover_pca_pose(pose_machine.pred_hand_pose, side=side)
     mano_rot = torch.zeros([bsize, 3], device=mano_pca_pose.device)
     mano_trans = torch.zeros([bsize, 3], device=mano_pca_pose.device)
     camintr = pose_machine.ihoi_cam.to_nr(return_mat=True)  # could be pose_machine.ihoi_cam
@@ -479,7 +477,7 @@ def init_hand_forwarder(one_hands,
         mano_trans = mano_trans,
         mano_rot = mano_rot,
         mano_betas = pose_machine.pred_hand_betas,
-        mano_pca_pose = pose_machine.recover_pca_pose(),
+        mano_pca_pose = mano_pca_pose,
         faces_hand = pose_machine.hand_faces,
 
         scale_hand = 1.0,

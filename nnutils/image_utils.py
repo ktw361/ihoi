@@ -3,6 +3,7 @@
 # --------------------------------------------------------
 from __future__ import print_function
 
+from typing import Union
 import os
 import os.path as osp
 import matplotlib
@@ -13,6 +14,8 @@ import imageio
 import numpy as np
 import torch
 import torchvision.utils as vutils
+import torchvision.transforms.functional as F
+from torchvision import transforms
 from PIL import Image
 from IPython import display
 
@@ -274,6 +277,71 @@ def crop_resize(img: np.ndarray, bbox, final_size=224, pad='constant', return_np
     if return_np:
         img = np.array(img)
     return img
+
+
+def crop_resize_v2(image: torch.Tensor,
+                   box: torch.Tensor,
+                   out_size: int) -> torch.Tensor:
+    """ Pad 0's if box exceeds boundary.
+
+    Args:
+        image: torch.Tensor (..., H, W)
+        box: torch.Tensor (4) xywh
+        out_size: int
+
+    Returns:
+        img_crop: torch.Tensor (..., crop_h, crop_w) in [0, 1]
+    """
+    x, y, w, h = box.clone()  # or call item() to avoid pointer
+    img_h, img_w = image.shape[-2:]
+    pad_x = max(max(-x ,0), max(x+w-img_w, 0))
+    pad_y = max(max(-y ,0), max(y+h-img_h, 0))
+    transform = transforms.Compose(
+        [transforms.Pad([pad_x, pad_y])])
+    x += pad_x
+    y += pad_y
+
+    image_pad = transform(image)
+    crop_tensor = F.resized_crop(
+        image_pad.unsqueeze(0),
+        int(y), int(x), int(h), int(w), size=[out_size, out_size],
+        interpolation=transforms.InterpolationMode.NEAREST
+    )[0]
+    return crop_tensor
+
+
+def batch_crop_resize(images: Union[np.ndarray, torch.Tensor],
+                      boxes: torch.Tensor,
+                      out_size: int) -> Union[np.ndarray, torch.Tensor]:
+    """ batched version of pad_and_crop()
+
+    Args:
+        images: (B, ..., H, W)
+        boxes: (B, 4) xywh
+        out_size: int
+
+    Returns:
+        img_crops: (B, ..., crop_h, crop_w) in [0, 1]
+    """
+    is_np = isinstance(images, np.ndarray)
+    if is_np:
+        to_tensor = transforms.ToTensor()
+        to_pil = transforms.ToPILImage()
+    bsize = len(images)
+    img_crops = [None for _ in range(bsize)]
+    for i in range(bsize):
+        img = to_tensor(images[i]) if is_np else images[i]
+        img_out = crop_resize_v2(img, boxes[i], out_size)
+        if is_np:
+            img_crops[i] = np.asarray(to_pil(img_out))
+        else:
+            img_crops[i] = img_out 
+            
+    if is_np:
+        img_crops = np.stack(img_crops, 0)
+    else:
+        img_crops = torch.stack(img_crops, 0)
+    return img_crops
 
 
 def affine_image(image, res, affine_trans=None, augment=None):
