@@ -117,10 +117,10 @@ class PoseRenderer(nn.Module):
             R=rot,  # eye(3)
             t=trans,  # zero
             orig_size=1,
+            K=camera_K,
             anti_aliasing=False,
         )
         self.lw_chamfer = lw_chamfer
-        self.camera_K = camera_K
 
         self.to(device)
         self._check_shape(self.bsize, num_init=num_initializations)
@@ -175,7 +175,7 @@ class PoseRenderer(nn.Module):
         """
         # On-screen means coord_xy between [-1, 1] and far > depth > 0
         b, n = verts.size(0), verts.size(1)
-        batch_K = self.camera_K.unsqueeze(1).repeat(1, n, 1, 1)  # (B, N, 3, 3)
+        batch_K = self.renderer.K.unsqueeze(1).repeat(1, n, 1, 1)  # (B, N, 3, 3)
         proj = nr.projection(
             verts.view(b*n, -1, 3),
             batch_K.view(b*n, 3, 3),
@@ -277,7 +277,7 @@ class PoseRenderer(nn.Module):
         b = verts.size(0)
         n = verts.size(1)
         batch_faces = self.faces.repeat(b, n, 1, 1)
-        batch_K = self.camera_K.unsqueeze(1).repeat(1, n, 1, 1)  # (B, 3, 3) -> (B, N, 3, 3)
+        batch_K = self.renderer.K.unsqueeze(1).repeat(1, n, 1, 1)  # (B, 3, 3) -> (B, N, 3, 3)
         images = self.renderer(
             verts.view(b*n, -1, 3),
             batch_faces.view(b*n, -1, 3),

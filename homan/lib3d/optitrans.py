@@ -81,16 +81,18 @@ def compute_optimal_translation(bbox_target, vertices, f=1, img_size=256):
     return torch.stack((x, y, z), -1).unsqueeze(1)
 
 
-def TCO_init_from_boxes_zup_autodepth(boxes_2d, model_points_3d, K):
-    """_summary_
+def TCO_init_from_boxes_zup_autodepth(boxes_2d: torch.Tensor, 
+                                      model_points_3d: torch.Tensor, 
+                                      K: torch.Tensor) -> torch.Tensor:
+    """
 
     Args:
-        boxes_2d (torch.Tensor): (400, 4), torch.float64
-        model_points_3d (torch.Tensor): (400, V, 3), e.g. V=5634, torch.float32
-        K (_type_): (B, 3, 3) _description_
+        boxes_2d: (B, 4), torch.float64
+        model_points_3d : (B, V, 3), e.g. V=5634, torch.float32
+        K: (B, 3, 3) _description_
 
     Returns:
-        translation: torch.Tensor (3,)
+        translation: (3,)
     """
     # User in BOP20 challenge
     model_points_3d = npt.tensorify(model_points_3d)

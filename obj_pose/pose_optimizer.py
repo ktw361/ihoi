@@ -17,6 +17,7 @@ from homan.utils.geometry import (
     compute_random_rotations,
     matrix_to_rot6d,
 )
+from temporal.utils import init_6d_pose_from_bboxes
 
 from libzhifan.geometry import (
     SimpleMesh, projection
@@ -367,7 +368,6 @@ class PoseOptimizer:
             num_iterations=num_iterations,
             debug=debug,
             sort_best=sort_best,
-            viz=viz,
             lr=lr,
         )
 
@@ -392,8 +392,7 @@ def find_optimal_pose(
     rotations_init=None,
     translations_init=None,
     base_rotation=None,
-    base_translation=None,
-    viz=True):
+    base_translation=None):
     """
     Args:
         vertices: torch.Tensor (V, 3)
@@ -458,23 +457,12 @@ def find_optimal_pose(
     else:
         base_translation = base_translation.clone()
 
-    """ V_out = (V_model @ R + T) @ R_base + T_base """
-    V_rotated = torch.matmul(
-        (vertices @ rotations_init).unsqueeze_(0),
-         base_rotation.unsqueeze(1))
-    if translations_init is None:
-        # Init B trans_init, each has N_init, then take mean of them
-        translations_init = []
-        for i in range(bsize):
-            _translations_init = TCO_init_from_boxes_zup_autodepth(
-                bbox[i], V_rotated[i], K_global[i]).unsqueeze_(1)
-            _translations_init -= base_translation[i]
-            _translations_init = _translations_init @ base_rotation[i].T  # inv
-            translations_init.append(_translations_init)
-    if K_global.size(0) == 1:
-        translations_init = translations_init[0]
-    else:
-        translations_init = sum(translations_init) / len(translations_init)
+    rotations_init, translations_init = \
+        init_6d_pose_from_bboxes(
+            bbox, vertices, cam_mat=K_global,
+            num_init=num_initializations,
+            base_rotation=base_rotation,
+            base_translation=base_translation)
 
     model = PoseRenderer(
         ref_image=mask,

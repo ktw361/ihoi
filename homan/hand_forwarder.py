@@ -28,8 +28,6 @@ from obj_pose.pose_optimizer import PoseOptimizer
 """
 Batch dimension == Time dimension
 """
-__hand_wrapper_left = ManopthWrapper(flat_hand_mean=False, side='left').to('cuda')
-__hand_wrapper_right = ManopthWrapper(flat_hand_mean=False, side='right').to('cuda')
 
 
 class HandForwarder(nn.Module):
