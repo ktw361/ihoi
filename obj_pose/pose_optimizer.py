@@ -56,10 +56,7 @@ class PoseOptimizer:
                  side,
                  ihoi_box_expand=1.0,
                  rend_size=REND_SIZE,
-                 device='cuda',
-                 hand_rotation=None,
-                 hand_translation=None,
-                 ):
+                 device='cuda'):
         """
         Args:
             hand_wrapper: Non flat ManoWrapper
@@ -83,12 +80,8 @@ class PoseOptimizer:
         _hand_bbox_proc = one_hand['bbox_processed']
         rot_axisang, _pred_hand_pose = _pred_hand_pose[:, :3], _pred_hand_pose[:, 3:]
 
-        if hand_rotation is not None and hand_translation is not None:
-            self._hand_rotation = hand_rotation
-            self._hand_translation = hand_translation
-        else:
-            self._hand_rotation, self._hand_translation = compute_hand_transform(
-                rot_axisang, _pred_hand_pose, pred_camera, side=side)
+        self._hand_rotation, self._hand_translation = compute_hand_transform(
+            rot_axisang, _pred_hand_pose, pred_camera, side=side)
         _hand_verts = self._calc_hand_mesh(_pred_hand_pose)
         hand_cam, global_cam = cam_from_bbox(_hand_bbox_proc)
 
@@ -426,8 +419,6 @@ def find_optimal_pose(
 
     # Stuff to keep around
     best_losses = torch.tensor(np.inf)
-    best_rots = None
-    best_trans = None
     best_loss_single = torch.tensor(np.inf)
     best_rots_single = None
     best_trans_single = None
@@ -499,20 +490,16 @@ def find_optimal_pose(
             best_trans_single = model.translations[ind].detach().clone()
         loop.set_description(f"obj loss: {best_loss_single.item():.3g}")
         loop.update()
-    if best_rots is None:
-        best_rots = model.rotations
-        best_trans = model.translations
-        best_losses = losses
-    else:
-        best_rots = torch.cat((best_rots, model.rotations), 0)
-        best_trans = torch.cat((best_trans, model.translations), 0)
-        best_losses = torch.cat((best_losses, losses))
+    loop.close()
+
+    best_rots = model.rotations
+    best_trans = model.translations
+    best_losses = losses
     if sort_best:
         inds = torch.argsort(best_losses)
         best_losses = best_losses[inds][:num_initializations].detach().clone()
         best_trans = best_trans[inds][:num_initializations].detach().clone()
         best_rots = best_rots[inds][:num_initializations].detach().clone()
-    loop.close()
     # Add best ever:
 
     if sort_best:

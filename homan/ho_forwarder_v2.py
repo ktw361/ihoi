@@ -359,22 +359,25 @@ class HOForwarderV2Impl(HOForwarderV2):
         images = images.view(b, n, self.mask_size, self.mask_size)
         return images
 
-    def forward_obj_pose_render(self):
+    def forward_obj_pose_render(self, loss_only):
         """ Reimplement the PoseRenderer.foward() """
         b, n, w = self.bsize, self.num_obj_init, self.mask_size
         verts = self.get_verts_object()
         image = self.keep_mask_object[:, None] * self.render_obj(verts)  # (B, N, W, W)
-        # image = image.view(b*n, w, w)
         image_ref = self.ref_mask_object[:, None]  # (B, 1, W, W)
         loss_dict = {}
         loss_dict["mask"] = torch.sum((image - image_ref)**2, dim=(2, 3)).mean(dim=0)
-        with torch.no_grad():
-            iou = batch_mask_iou(
-                image.view(b*n, w, w).detach(),
-                image_ref.repeat(1, n, 1, 1).view(b*n, w, w).detach())  # (B*N,)
-            iou = iou.view(b, n).mean(0)  # (N,)
+        if not loss_only:
+            with torch.no_grad():
+                iou = batch_mask_iou(
+                    image.view(b*n, w, w).detach(),
+                    image_ref.repeat(1, n, 1, 1).view(b*n, w, w).detach())  # (B*N,)
+                iou = iou.view(b, n).mean(0)  # (N,)
         loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(verts)
-        return loss_dict, iou, image
+        if not loss_only:
+            return loss_dict, iou, image
+        else:
+            return loss_dict
 
     def compute_offscreen_loss(self, verts):
         """
@@ -411,7 +414,7 @@ class HOForwarderV2Impl(HOForwarderV2):
 
 
 
-from typing import List
+from typing import List, Tuple
 import numpy as np
 from libzhifan.geometry import SimpleMesh, visualize_mesh, projection, CameraManager
 import matplotlib.pyplot as plt
@@ -428,26 +431,46 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         self.vis_rend_size = vis_rend_size
         self.ihoi_img_patch = ihoi_img_patch
     
-    def get_meshes(self, idx, **mesh_kwargs) -> List[SimpleMesh]:
+    def get_meshes(self, scene_idx, obj_idx, **mesh_kwargs) -> Tuple[SimpleMesh]:
+        """
+        Args:
+            scene_idx: index of scene (timestep)
+            obj_idx: -1 indicates no object
+        
+        Returns:
+            mhand: SimpleMesh
+            mobj: SimpleMesh, or None if obj_idx < 0
+        """
         hand_color = mesh_kwargs.pop('hand_color', 'light_blue')
+        obj_color = mesh_kwargs.pop('obj_color', 'yellow')
         with torch.no_grad():
-            verts_hand = self.get_verts_hand(**mesh_kwargs)[idx]
+            verts_hand = self.get_verts_hand(**mesh_kwargs)[scene_idx]
             mhand = SimpleMesh(
-                verts_hand, self.faces_hand[idx], tex_color=hand_color)
-        return mhand
+                verts_hand, self.faces_hand[scene_idx], tex_color=hand_color)
+            if obj_idx < 0:
+                mobj = None
+            else:
+                verts_obj = self.get_verts_object(**mesh_kwargs)[scene_idx, obj_idx]
+                mobj = SimpleMesh(
+                    verts_obj, self.faces_object[0], tex_color=obj_color)
+        return mhand, mobj
 
-    def to_scene(self, idx=-1, show_axis=False, viewpoint='nr', **mesh_kwargs):
+    def to_scene(self, scene_idx=-1, obj_idx=0, 
+                 show_axis=False, viewpoint='nr', **mesh_kwargs):
         """ Returns a trimesh.Scene """
-        if idx >= 0:
-            mhand = self.get_meshes(idx=idx, **mesh_kwargs)
-            return visualize_mesh(mhand,
+        if scene_idx >= 0:
+            mhand, mobj = self.get_meshes(
+                scene_idx=scene_idx, obj_idx=obj_idx, **mesh_kwargs)
+            return visualize_mesh([mhand, mobj],
                                   show_axis=show_axis,
                                   viewpoint=viewpoint)
 
         """ Render all """
         hand_color = mesh_kwargs.pop('hand_color', 'light_blue')
+        obj_color = mesh_kwargs.pop('obj_color', 'yellow')
         with torch.no_grad():
             verts_hand = self.get_verts_hand(**mesh_kwargs)
+            verts_obj = self.get_verts_object(**mesh_kwargs)
 
         meshes = []
         disp = 0.15  # displacement
@@ -455,50 +478,56 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             mhand = SimpleMesh(
                 verts_hand[t], self.faces_hand[t], tex_color=hand_color)
             mhand.apply_translation_([t * disp, 0, 0])
+            mobj = SimpleMesh(
+                verts_obj[t, obj_idx], self.faces_object[0], tex_color=obj_color)
+            mobj.apply_translation_([t * disp, 0, 0])
             meshes.append(mhand)
+            meshes.append(mobj)
         return visualize_mesh(meshes, show_axis=show_axis)
 
-    def render_summary(self, idx) -> np.ndarray:
-        a1 = np.uint8(self.ihoi_img_patch[idx])
-        mask_hand = self.ref_mask_hand[idx].cpu().numpy().squeeze()
+    def render_summary(self, scene_idx, obj_idx=0) -> np.ndarray:
+        a1 = np.uint8(self.ihoi_img_patch[scene_idx])
+        mask_hand = self.ref_mask_hand[scene_idx].cpu().numpy().squeeze()
         all_mask = np.zeros_like(a1, dtype=np.float32)
         all_mask = np.where(
             mask_hand[...,None], (0, 0, 0.8), all_mask)
         all_mask = np.uint8(255*all_mask)
         a2 = cv2.addWeighted(a1, 0.9, all_mask, 0.5, 1.0)
-        a3 = np.uint8(self.render_scene(idx=idx)*255)
-        b = np.uint8(255*self.render_triview(idx=idx))
+        a3 = np.uint8(self.render_scene(scene_idx=scene_idx, obj_idx=obj_idx)*255)
+        b = np.uint8(255*self.render_triview(scene_idx=scene_idx, obj_idx=obj_idx))
         a = np.hstack([a3, a2, a1])
         return np.vstack([a,
                           b])
 
-    def render_scene(self, idx, with_hand=True, **mesh_kwargs) -> np.ndarray:
+    def render_scene(self, scene_idx, obj_idx=0, 
+                     with_hand=True, **mesh_kwargs) -> np.ndarray:
         """ returns: (H, W, 3) """
         if not with_hand:
-            return self.ihoi_img_patch[idx]
-        mhand = self.get_meshes(idx=idx, **mesh_kwargs)
+            return self.ihoi_img_patch[scene_idx]
+        mhand, mobj = self.get_meshes(
+            scene_idx=scene_idx, obj_idx=obj_idx, **mesh_kwargs)
         img = projection.perspective_projection_by_camera(
-            [mhand],
+            [mhand, mobj],
             CameraManager.from_nr(
-                self.camintr.detach().cpu().numpy()[idx], self.vis_rend_size),
+                self.camintr.detach().cpu().numpy()[scene_idx], self.vis_rend_size),
             method=dict(
                 name='pytorch3d',
                 coor_sys='nr',
                 in_ndc=False
             ),
-            image=self.ihoi_img_patch[idx],
+            image=self.ihoi_img_patch[scene_idx],
         )
         return img
 
-    def render_triview(self, idx, **mesh_kwargs) -> np.ndarray:
+    def render_triview(self, scene_idx, obj_idx=0, **mesh_kwargs) -> np.ndarray:
         """
         Returns:
             (H, W, 3)
         """
         rend_size = 256
-        mhand = self.get_meshes(idx=idx, **mesh_kwargs)
+        mhand, mobj = self.get_meshes(scene_idx=scene_idx, obj_idx=obj_idx, **mesh_kwargs)
         front = projection.project_standardized(
-            [mhand],
+            [mhand, mobj],
             direction='+z',
             image_size=rend_size,
             method=dict(
@@ -508,7 +537,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             )
         )
         left = projection.project_standardized(
-            [mhand],
+            [mhand, mobj],
             direction='+x',
             image_size=rend_size,
             method=dict(
@@ -518,7 +547,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             )
         )
         back = projection.project_standardized(
-            [mhand],
+            [mhand, mobj],
             direction='-z',
             image_size=rend_size,
             method=dict(
@@ -529,7 +558,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         )
         return np.hstack([front, left, back])
 
-    def render_grid(self, with_hand=True):
+    def render_grid(self, obj_idx=0, with_hand=True):
         l = self.bsize
         num_cols = 5
         num_rows = (l + num_cols - 1) // num_cols
@@ -537,7 +566,8 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             nrows=num_rows, ncols=num_cols,
             sharex=True, sharey=True, figsize=(20, 20))
         for cam_idx, ax in enumerate(axes.flat, start=0):
-            img = self.render_scene(idx=cam_idx, with_hand=with_hand)
+            img = self.render_scene(
+                scene_idx=cam_idx, obj_idx=obj_idx, with_hand=with_hand)
             ax.imshow(img)
             ax.set_axis_off()
             if cam_idx == l-1:

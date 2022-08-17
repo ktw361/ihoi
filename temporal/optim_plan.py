@@ -84,9 +84,6 @@ def optimize_hand(homan: HOForwarderV2Impl,
 def find_optimal_obj_pose(homan: HOForwarderV2Impl,
                           num_iterations=50,
                           lr=1e-2,
-                          debug=True,
-                          viz_folder='output/tmp',
-                          viz_step=10,
                           sort_best=True) -> HOForwarderV2Impl:
     device = 'cuda'
     optimizer = torch.optim.Adam([
@@ -104,45 +101,33 @@ def find_optimal_obj_pose(homan: HOForwarderV2Impl,
     best_trans = None
     best_loss_single = torch.tensor(np.inf)
     best_trans_single = None
-    loop = tqdm.tqdm(total=num_iterations)
 
-    for _ in range(num_iterations):
-        optimizer.zero_grad()
-        loss_dict, _, sil = homan.forward_obj_pose_render()
-        # if debug and (step % viz_step == 0):
-        #     mask_viz = mask[0]  # select 0-th mask for visualization
-        #     debug_viz_folder = os.path.join(viz_folder, "poseoptim")
-        #     os.makedirs(debug_viz_folder, exist_ok=True)
-        #     imagify.viz_imgrow(
-        #         sil[0], overlays=[mask_viz,]*len(sil[0]), viz_nb=4,
-        #         path=os.path.join(debug_viz_folder, f"{step:04d}.png"))
+    with tqdm.tqdm(total=num_iterations) as loop:
+        for _ in range(num_iterations):
+            optimizer.zero_grad()
+            loss_dict = homan.forward_obj_pose_render(loss_only=True)
 
-        losses = sum(loss_dict.values())
-        loss = losses.sum()
-        loss.backward()
-        optimizer.step()
-        if losses.min() < best_loss_single:
-            ind = torch.argmin(losses)
-            best_loss_single = losses[ind]
-            best_rots_single = homan.rotations_object[ind].detach().clone()
-            best_trans_single = homan.translations_object[ind].detach().clone()
-        loop.set_description(f"obj loss: {best_loss_single.item():.3g}")
-        loop.update()
-    if best_rots is None:
-        best_rots = homan.rotations_object
-        best_trans = homan.translations_object
-        best_losses = losses
-    else:
-        best_rots = torch.cat((best_rots, homan.rotations_object), 0)
-        best_trans = torch.cat((best_trans, homan.translations_object), 0)
-        best_losses = torch.cat((best_losses, losses))
+            losses = sum(loss_dict.values())
+            loss = losses.sum()
+            loss.backward()
+            optimizer.step()
+            if losses.min() < best_loss_single:
+                ind = torch.argmin(losses)
+                best_loss_single = losses[ind]
+                best_rots_single = homan.rotations_object[ind].detach().clone()
+                best_trans_single = homan.translations_object[ind].detach().clone()
+            loop.set_description(f"obj loss: {best_loss_single.item():.3g}")
+            loop.update()
+
+    best_rots = homan.rotations_object
+    best_trans = homan.translations_object
+    best_losses = losses
     if sort_best:
         inds = torch.argsort(best_losses)
         num_obj_init = homan.num_obj_init
         best_losses = best_losses[inds][:num_obj_init].detach().clone()
         best_trans = best_trans[inds][:num_obj_init].detach().clone()
         best_rots = best_rots[inds][:num_obj_init].detach().clone()
-    loop.close()
     # Add best ever:
 
     if sort_best:
@@ -150,8 +135,8 @@ def find_optimal_obj_pose(homan: HOForwarderV2Impl,
                               0)
         best_trans = torch.cat(
             (best_trans_single.unsqueeze(0), best_trans[:-1]), 0)
-    # model.rotations = nn.Parameter(best_rots)
-    # model.translations = nn.Parameter(best_trans)
+    homan.rotations_object = torch.nn.Parameter(best_rots)
+    homan.translations_object = torch.nn.Parameter(best_trans)
     return homan
 
 
