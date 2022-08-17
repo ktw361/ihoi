@@ -85,12 +85,14 @@ def find_optimal_obj_pose(homan: HOForwarderV2Impl,
                           num_iterations=50,
                           lr=1e-2,
                           sort_best=True) -> HOForwarderV2Impl:
-    device = 'cuda'
     optimizer = torch.optim.Adam([
         {
             'params': [
+                homan.rotations_hand,  # 
+                homan.translations_hand,  #
                 homan.rotations_object,
                 homan.translations_object,
+                homan.scale_object,
             ],
             'lr': lr
         }
@@ -139,6 +141,54 @@ def find_optimal_obj_pose(homan: HOForwarderV2Impl,
     homan.translations_object = torch.nn.Parameter(best_trans)
     return homan
 
+
+def optimize_hand_allmask(homan: HOForwarderV2Impl,
+                          lr=1e-2,
+                          num_steps=100,
+                          verbose=True):
+    optimizer = torch.optim.Adam([
+        {
+            'params': [
+                homan.rotations_hand,
+                homan.translations_hand,
+                homan.rotations_object,
+                homan.translations_object,
+                homan.scale_object,
+            ],
+            'lr': lr
+        }
+    ])
+
+    loss_records = {
+        'total': [],
+        'sil': [],
+        'pca': [],
+        'rot': [],
+        'transl': [],
+    }
+    with tqdm.tqdm(total=num_steps) as loop:
+        for step in range(num_steps):
+            optimizer.zero_grad()
+            l_sil_hand = homan.loss_sil_hand(compute_iou=False, func='l2')
+            l_obj_dict = homan.forward_obj_pose_render(loss_only=True, func='l2')
+            tot_loss = l_sil_hand.sum() + 0.1 * sum(l_obj_dict.values()).sum()
+
+            # if verbose and step % 10 == 0:
+            #     print(f"Step {step}, tot = {tot_loss.item():.04f}, ", end=' ')
+            #     print()
+
+            # loss_records['total'].append(tot_loss.item())
+            # for k, v in loss_dict.items():
+            #     loss_records[k].append(v.item())
+
+            tot_loss.backward()
+            optimizer.step()
+            loop.set_description(f"obj loss: {tot_loss.item():.3g}")
+            loop.update()
+    
+    # homan.loss_records = loss_records
+
+    return homan
 
 # def optimize_scale(homan,
 #                    num_steps=100,

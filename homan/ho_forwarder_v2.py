@@ -256,7 +256,6 @@ class HOForwarderV2(nn.Module):
                 ),  # (B, N, 1, 3)
                 T_hand.unsqueeze(1),  # (B, 1, 3) -> (B, 1, 1, 3)
             ) # (B, N, 1, 3)
-        # scale = torch.ones(B).to(device)
         return torch.matmul(
             self.verts_object_og * scale, rots) + (scale * transl)
     
@@ -359,14 +358,25 @@ class HOForwarderV2Impl(HOForwarderV2):
         images = images.view(b, n, self.mask_size, self.mask_size)
         return images
 
-    def forward_obj_pose_render(self, loss_only):
-        """ Reimplement the PoseRenderer.foward() """
+    def forward_obj_pose_render(self, loss_only=True, func='l2'):
+        """ Reimplement the PoseRenderer.foward() 
+        
+        Returns:
+            loss_dict: dict with
+                - mask: (N,)
+                - offscreen: (N,)
+        """
         b, n, w = self.bsize, self.num_obj_init, self.mask_size
         verts = self.get_verts_object()
         image = self.keep_mask_object[:, None] * self.render_obj(verts)  # (B, N, W, W)
         image_ref = self.ref_mask_object[:, None]  # (B, 1, W, W)
         loss_dict = {}
-        loss_dict["mask"] = torch.sum((image - image_ref)**2, dim=(2, 3)).mean(dim=0)
+        if func == 'l2':
+            loss_mask = torch.sum((image - image_ref)**2, dim=(2, 3)).mean(dim=0)
+        elif func == 'iou':
+            loss_mask = iou_loss(image, image_ref).mean(dim=0)
+
+        loss_dict["mask"] = loss_mask
         if not loss_only:
             with torch.no_grad():
                 iou = batch_mask_iou(
@@ -411,6 +421,8 @@ class HOForwarderV2Impl(HOForwarderV2):
         too_far = torch.max(coord_z - self.renderer.far, zeros).sum(dim=(1, 2))
         loss = lower_right + upper_left + behind + too_far  # (B*N)
         return loss.view(b, n).mean(0)
+    
+    """ Hand-Object interaction """
 
 
 
@@ -488,9 +500,12 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
     def render_summary(self, scene_idx, obj_idx=0) -> np.ndarray:
         a1 = np.uint8(self.ihoi_img_patch[scene_idx])
         mask_hand = self.ref_mask_hand[scene_idx].cpu().numpy().squeeze()
+        mask_obj = self.ref_mask_object[scene_idx].cpu().numpy()
         all_mask = np.zeros_like(a1, dtype=np.float32)
         all_mask = np.where(
             mask_hand[...,None], (0, 0, 0.8), all_mask)
+        all_mask = np.where(
+            mask_obj[...,None], (0.6, 0, 0), all_mask)
         all_mask = np.uint8(255*all_mask)
         a2 = cv2.addWeighted(a1, 0.9, all_mask, 0.5, 1.0)
         a3 = np.uint8(self.render_scene(scene_idx=scene_idx, obj_idx=obj_idx)*255)
@@ -517,6 +532,17 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             ),
             image=self.ihoi_img_patch[scene_idx],
         )
+
+        # Add mask
+        all_mask = np.zeros_like(img, dtype=np.float32)
+        mask_hand = self.ref_mask_hand[scene_idx].cpu().numpy().squeeze()
+        mask_obj = self.ref_mask_object[scene_idx].cpu().numpy()
+        all_mask = np.where(
+            mask_hand[...,None], (0, 0, 0.8), all_mask)
+        all_mask = np.where(
+            mask_obj[...,None], (0.6, 0, 0), all_mask)
+        all_mask = np.uint8(255*all_mask)
+        img = cv2.addWeighted(np.uint8(img*255), 0.9, all_mask, 0.5, 1.0)
         return img
 
     def render_triview(self, scene_idx, obj_idx=0, **mesh_kwargs) -> np.ndarray:

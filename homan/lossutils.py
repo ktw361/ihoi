@@ -111,15 +111,15 @@ def compute_ordinal_depth_loss(masks:torch.Tensor,
 def iou_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
     """
     Args:
-        pred: (B, H, W) values in [0, 1]
-        gt: (B, H, W) values in [0, 1]
+        pred: (..., H, W) values in [0, 1]
+        gt: (..., H, W) values in [0, 1]
     
     Returns:
-        loss: (B,) in [0, inf)
+        loss: (...,) in [0, inf)
     """
     union = pred + gt
     inter = pred * gt
-    iou = inter.sum(dim=(1, 2)) / ((union - inter).sum(dim=(1, 2)) + 1e-7)
+    iou = inter.sum(dim=(-2, -1)) / ((union - inter).sum(dim=(-2, -1)) + 1e-7)
     # loss = 1.0 - iou
     loss = - iou.log_()
     return loss
