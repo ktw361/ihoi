@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import neural_renderer as nr
+from scipy.ndimage.morphology import distance_transform_edt
 
 from nnutils.handmocap import get_hand_faces
 from homan.homan_ManoModel import HomanManoModel
@@ -17,10 +18,6 @@ from libzhifan.geometry import BatchCameraManager
 from libyana.metrics.iou import batch_mask_iou
 
 
-def init_6d_pose_from_bboxes():
-    pass
-
-
 class HOForwarderV2(nn.Module):
     
     def __init__(self,
@@ -33,11 +30,12 @@ class HOForwarderV2(nn.Module):
         super().__init__()
         bsize = len(camintr)
         self.bsize = bsize
+        self.mask_size = 256
         self.register_buffer("camintr", camintr)
         
         """ Set-up silhouettes renderer """
         self.renderer = nr.renderer.Renderer(
-            image_size=256,
+            image_size=self.mask_size,
             K=camintr.clone(),
             R=torch.eye(3, device='cuda')[None],
             t=torch.zeros([1, 3], device='cuda'),
@@ -47,6 +45,16 @@ class HOForwarderV2(nn.Module):
         self.renderer.light_intensity_ambient = 0.5
         self.renderer.background_color = [1.0, 1.0, 1.0]
         # TODO: ordinal loss renderer image_size
+
+    """ Common functions """
+
+    def checkpoint(self, session=0):
+        torch.save(self.state_dict(), f'/tmp/h{session}.pth')
+    
+    def resume(self, session=0):
+        self.load_state_dict(torch.load(f'/tmp/h{session}.pth'), strict=True)
+
+    """ Hand functions """
 
     def set_hand_params(self,
                         rotations_hand,
@@ -104,83 +112,17 @@ class HOForwarderV2(nn.Module):
     def _check_shape_hand(self, bsize):
         check_shape(self.faces_hand, (bsize, -1, 3))
         check_shape(self.camintr, (bsize, 3, 3))
+        check_shape(self.ref_mask_hand, (bsize, self.mask_size, self.mask_size))
         mask_shape = self.ref_mask_hand.shape
-        check_shape(self.ref_mask_hand, mask_shape)
         check_shape(self.keep_mask_hand, mask_shape)
         check_shape(self.rotations_hand, (bsize, 3, 2))
         check_shape(self.translations_hand, (bsize, 1, 3))
         # ordinal loss
-        check_shape(self.masks_human, (bsize, 1, -1, -1))
-
-    def set_obj_params(self,
-                       translations_object,  # (1, 3)
-                       rotations_object,
-                       verts_object_og,
-                       faces_object,
-                       scale_object=1.0):
-        """ Initialize object pamaters """
-        if rotations_object.shape[-1] == 3:
-            rotations_object6d = matrix_to_rot6d(rotations_object)
-        else:
-            rotations_object6d = rotations_object
-        self.rotations_object = nn.Parameter(
-            rotations_object6d.detach().clone(), requires_grad=True)
-        self.translations_object = nn.Parameter(
-            translations_object.detach().clone(),
-            requires_grad=True)
-        self.register_buffer("verts_object_og", verts_object_og)
-        """ Translation is also a function of scale T(s) = s * T_init """
-        self.scale_object = nn.Parameter(
-            torch.as_tensor([scale_object]),
-            requires_grad=True,
-        )
-        self.register_buffer("faces_object", faces_object.repeat(self.bsize, 1, 1))
-        self.register_buffer(
-            "textures_object",
-            torch.ones(self.bsize, faces_object.shape[1], 1, 1, 1, 3))
+        check_shape(self.masks_human, (bsize, 1, self.mask_size, self.mask_size))
     
-    def set_obj_target(self, target_masks_object):
-        self.register_buffer("ref_mask_object",
-                             (target_masks_object > 0).float())
-        self.register_buffer("keep_mask_object",
-                             (target_masks_object >= 0).float())
-        self._check_shape_object(self.bsize)
-
-    def _check_shape_object(self, bsize):
-        check_shape(self.faces_object, (bsize, -1, 3))
-        check_shape(self.ref_mask_object, (bsize, -1, -1))
-        mask_shape = self.ref_mask_object.shape
-        check_shape(self.keep_mask_object, mask_shape)
-        check_shape(self.rotations_object, (1, 3, 2))
-        check_shape(self.translations_object, (1, 1, 3))
-        # ordinal loss
-        check_shape(self.masks_object, (bsize, 1, -1, -1))
-
-    def get_verts_object(self,
-                         scale_object=None) -> torch.Tensor:
-        """
-            V_out = (V_model x R_o2h + T_o2h) x R_hand + T_hand
-                  = V x (R_o2h x R_hand) + (T_o2h x R_hand + T_hand)
-        where self.rotations/translations_object is R/T_o2h from object to hand
-
-        Returns:
-            verts_object: (B, V, 3)
-        """
-        rotations_o2h = rot6d_to_matrix(self.rotations_object)
-        translations_o2h = self.translations_object
-        intrinsic_scales = self.scale_object if scale_object is None else scale_object
-        """ Compound T_o2c (T_obj w.r.t camera) = T_h2c x To2h_ """
-        R_hand = rot6d_to_matrix(self.rotations_hand)
-        T_hand = self.translations_hand
-        rot_o2c = rotations_o2h @ R_hand
-        transl_o2c = translations_o2h @ R_hand + T_hand
-        obj_verts = compute_transformation_persp(
-            meshes=self.verts_object_og,
-            translations=transl_o2c,
-            rotations=rot_o2c,
-            intrinsic_scales=intrinsic_scales
-        )
-        return obj_verts
+    @property
+    def rot_mat_hand(self) -> torch.Tensor:
+        return rot6d_to_matrix(self.rotations_hand)
 
     def get_verts_hand(self, detach_scale=False) -> torch.Tensor:
         all_hand_verts = []
@@ -201,7 +143,7 @@ class HOForwarderV2(nn.Module):
             scale = self.scale_hand.detach()
         else:
             scale = self.scale_hand
-        rotations_hand = rot6d_to_matrix(self.rotations_hand)
+        rotations_hand = self.rot_mat_hand
 
         hand_proj_mode = 'persp'
         if hand_proj_mode == "ortho":
@@ -225,12 +167,99 @@ class HOForwarderV2(nn.Module):
                 f"Expected hand_proj_mode {self.hand_proj_mode} to be in [ortho|persp]"
             )
 
-    def checkpoint(self, session=0):
-        torch.save(self.state_dict(), f'/tmp/h{session}.pth')
-    
-    def resume(self, session=0):
-        self.load_state_dict(torch.load(f'/tmp/h{session}.pth'), strict=True)
+    """ Object functions """
 
+    def set_obj_params(self,
+                       translations_object,
+                       rotations_object,
+                       verts_object_og,
+                       faces_object,
+                       scale_object=1.0):
+        """ Initialize object pamaters
+
+        Args:
+            obj_trans: (N, 3, 3)
+        """
+        self.num_obj_init = len(rotations_object)
+        if rotations_object.shape[-1] == 3:
+            rotations_object6d = matrix_to_rot6d(rotations_object)
+        else:
+            rotations_object6d = rotations_object
+        self.rotations_object = nn.Parameter(
+            rotations_object6d.detach().clone(), requires_grad=True)
+        self.translations_object = nn.Parameter(
+            translations_object.detach().clone(),
+            requires_grad=True)
+        """ Translation is also a function of scale T(s) = s * T_init """
+        self.scale_object = nn.Parameter(
+            torch.as_tensor([scale_object]),
+            requires_grad=True,
+        )
+        self.register_buffer("verts_object_og", verts_object_og)
+        self.register_buffer(
+            "faces_object", 
+            faces_object.repeat(self.bsize * self.num_obj_init, 1, 1))
+        self.register_buffer(
+            "textures_object",
+            torch.ones(self.bsize * self.num_obj_init, 
+                       faces_object.shape[1], 1, 1, 1, 3))
+    
+    def set_obj_target(self, target_masks_object: torch.Tensor):
+        """
+        Args:
+            target_masks_object: (B, W, W)
+        """
+        target_masks_object = target_masks_object
+        self.register_buffer("ref_mask_object",
+                             (target_masks_object > 0).float())
+        self.register_buffer("keep_mask_object",
+                             (target_masks_object >= 0).float())
+        # edge loss is not used
+        self.cuda()
+        self._check_shape_object(self.num_obj_init)
+
+    def _check_shape_object(self, num_init):
+        check_shape(self.verts_object_og, (-1, 3))
+        check_shape(self.faces_object, (self.bsize * num_init, -1, 3))
+        check_shape(self.ref_mask_object,  (self.bsize, self.mask_size, self.mask_size))
+        mask_shape = self.ref_mask_object.shape
+        check_shape(self.keep_mask_object, mask_shape)
+        check_shape(self.rotations_object, (num_init, 3, 2))
+        check_shape(self.translations_object, (num_init, 1, 3))
+        # ordinal loss TODO
+        # check_shape(self.masks_object, (num_init, 1, self.mask_size, self.mask_size))
+    
+    @property
+    def rot_mat_obj(self) -> torch.Tensor:
+        return rot6d_to_matrix(self.rotations_object)
+
+    def get_verts_object(self) -> torch.Tensor:
+        """
+            V_out = (V_model x R_o2h + T_o2h) x R_hand + T_hand
+                  = V x (R_o2h x R_hand) + (T_o2h x R_hand + T_hand)
+        where self.rotations/translations_object is R/T_o2h from object to hand
+
+        Returns:
+            verts_object: (B, N, V, 3)
+        """
+        R_o2h = self.rot_mat_obj  # (N, 3, 3)
+        T_o2h = self.translations_object  # (N, 1, 3)
+        scale = self.scale_object
+        """ Compound T_o2c (T_obj w.r.t camera) = T_h2c x To2h_ """
+        R_hand = self.rot_mat_hand  # (B, 3, 3)
+        T_hand = self.translations_hand  # (B, 1, 3)
+        rots = R_o2h.unsqueeze(0) @ R_hand.unsqueeze(1)
+        transl = torch.add(
+                torch.matmul(
+                    T_o2h.unsqueeze(0),  # (N, 1, 3) -> (1, N, 1, 3)
+                    R_hand.unsqueeze(1),  # (B, 3, 3) -> (B, 1, 3, 3)
+                ),  # (B, N, 1, 3)
+                T_hand.unsqueeze(1),  # (B, 1, 3) -> (B, 1, 1, 3)
+            ) # (B, N, 1, 3)
+        # scale = torch.ones(B).to(device)
+        return torch.matmul(
+            self.verts_object_og * scale, rots) + (scale * transl)
+    
 
 class HOForwarderV2Impl(HOForwarderV2):
     def __init__(self, *args, **kwargs):
@@ -269,7 +298,7 @@ class HOForwarderV2Impl(HOForwarderV2):
     def loss_hand_rot(self) -> torch.Tensor:
         """ Interpolation loss for hand rotation """
         device = self.rotations_hand.device
-        rotmat = rot6d_to_matrix(self.rotations_hand)
+        rotmat = self.rot_mat_hand
         rot_mid = roma.rotmat_slerp(
             rotmat[2:], rotmat[:-2],
             torch.as_tensor([0.5], device=device))[0]
@@ -307,6 +336,80 @@ class HOForwarderV2Impl(HOForwarderV2):
         total_loss = sum([v for v in losses.values()])
         return total_loss, losses
 
+    """ Object functions """
+
+    def render_obj(self, verts=None) -> torch.Tensor:
+        """
+        Renders objects according to current rotation and translation.
+
+        Returns:
+            images: ndarray (B, N_init, W, W)
+        """
+        if verts is None:
+            verts = self.get_verts_object()  # (B, N, V, 3)
+        b = verts.size(0)
+        n = verts.size(1)
+        batch_faces = self.faces_object  # (B*N, F, 3)
+        batch_K = self.camintr.unsqueeze(1).repeat(1, n, 1, 1)  # (B, 3, 3) -> (B, N, 3, 3)
+        images = self.renderer(
+            verts.view(b*n, -1, 3),
+            batch_faces,
+            K=batch_K.view(b*n, -1, 3),
+            mode='silhouettes')
+        images = images.view(b, n, self.mask_size, self.mask_size)
+        return images
+
+    def forward_obj_pose_render(self):
+        """ Reimplement the PoseRenderer.foward() """
+        b, n, w = self.bsize, self.num_obj_init, self.mask_size
+        verts = self.get_verts_object()
+        image = self.keep_mask_object[:, None] * self.render_obj(verts)  # (B, N, W, W)
+        # image = image.view(b*n, w, w)
+        image_ref = self.ref_mask_object[:, None]  # (B, 1, W, W)
+        loss_dict = {}
+        loss_dict["mask"] = torch.sum((image - image_ref)**2, dim=(2, 3)).mean(dim=0)
+        with torch.no_grad():
+            iou = batch_mask_iou(
+                image.view(b*n, w, w).detach(),
+                image_ref.repeat(1, n, 1, 1).view(b*n, w, w).detach())  # (B*N,)
+            iou = iou.view(b, n).mean(0)  # (N,)
+        loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(verts)
+        return loss_dict, iou, image
+
+    def compute_offscreen_loss(self, verts):
+        """
+        Computes loss for offscreen penalty. This is used to prevent the degenerate
+        solution of moving the object offscreen to minimize the chamfer loss.
+
+        Args:
+            verts: (B, N, V, 3)
+
+        Returns:
+            loss: (N,)
+        """
+        # On-screen means coord_xy between [-1, 1] and far > depth > 0
+        b, n = verts.size(0), verts.size(1)
+        batch_K = self.camintr.unsqueeze(1).repeat(1, n, 1, 1)  # (B, N, 3, 3)
+        proj = nr.projection(
+            verts.view(b*n, -1, 3),
+            batch_K.view(b*n, 3, 3),
+            self.renderer.R,
+            self.renderer.t,
+            self.renderer.dist_coeffs,
+            orig_size=1,
+        )  # (B*N, ...)
+        coord_xy, coord_z = proj[:, :, :2], proj[:, :, 2:]
+        zeros = torch.zeros_like(coord_z)
+        lower_right = torch.max(coord_xy - 1,
+                                zeros).sum(dim=(1, 2))  # Amount greater than 1
+        upper_left = torch.max(-1 - coord_xy,
+                               zeros).sum(dim=(1, 2))  # Amount less than -1
+        behind = torch.max(-coord_z, zeros).sum(dim=(1, 2))
+        too_far = torch.max(coord_z - self.renderer.far, zeros).sum(dim=(1, 2))
+        loss = lower_right + upper_left + behind + too_far  # (B*N)
+        return loss.view(b, n).mean(0)
+
+
 
 from typing import List
 import numpy as np
@@ -317,12 +420,12 @@ import cv2
 
 class HOForwarderV2Vis(HOForwarderV2Impl):
     def __init__(self, 
-                 rend_size=256, 
+                 vis_rend_size=256, 
                  ihoi_img_patch=None, 
                  *args, 
                  **kwargs):
         super().__init__(*args, **kwargs)
-        self.rend_size = rend_size
+        self.vis_rend_size = vis_rend_size
         self.ihoi_img_patch = ihoi_img_patch
     
     def get_meshes(self, idx, **mesh_kwargs) -> List[SimpleMesh]:
@@ -377,7 +480,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         img = projection.perspective_projection_by_camera(
             [mhand],
             CameraManager.from_nr(
-                self.camintr.detach().cpu().numpy()[idx], self.rend_size),
+                self.camintr.detach().cpu().numpy()[idx], self.vis_rend_size),
             method=dict(
                 name='pytorch3d',
                 coor_sys='nr',
