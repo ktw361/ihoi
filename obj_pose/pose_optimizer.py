@@ -181,6 +181,7 @@ class PoseOptimizer:
                 - 'global': render w.r.t full image
                 - 'ihoi': render w.r.t image prepared
                     according to process_mocap_predictions()
+                - 'hand': render using camera from frankMocap bbox
         """
         hand_mesh = self.hand_simplemesh(cam_idx=cam_idx)
         if clustered:
@@ -219,6 +220,18 @@ class PoseOptimizer:
                     in_ndc=False
                 ),
                 image=np.uint8(self._image_patch[cam_idx]),
+            )
+            return img
+        elif kind == 'hand':
+            img = projection.perspective_projection_by_camera(
+                mesh_list,
+                self.hand_cam[cam_idx],
+                method=dict(
+                    name='pytorch3d',
+                    coor_sys='nr',
+                    in_ndc=False
+                ),
+                image=None,
             )
             return img
         elif kind == 'none':
