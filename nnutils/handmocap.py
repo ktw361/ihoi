@@ -55,11 +55,11 @@ def get_hand_faces(side: str) -> torch.Tensor:
 
 def get_handmocap_predictor(
         mocap_dir='externals/frankmocap',
-        checkpoint_hand='extra_data/hand_module/pretrained_weights/pose_shape_best.pth', 
+        checkpoint_hand='extra_data/hand_module/pretrained_weights/pose_shape_best.pth',
         smpl_dir='extra_data/smpl/',
     ):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    hand_mocap = HandMocap(osp.join(mocap_dir, checkpoint_hand), 
+    hand_mocap = HandMocap(osp.join(mocap_dir, checkpoint_hand),
         osp.join(mocap_dir, smpl_dir), device = device)
     return hand_mocap
 
@@ -83,13 +83,13 @@ def collate_mocap_hand(mocap_predictions: list,
         pred_hand_betas (1, 10)
         pred_vertices_img (778, 3)
         pred_joints_img (21, 3)
-    
+
     Args:
         mocap_predictions: list of [
             dict('left_hand': dict
-                 'right_hand': dict) 
+                 'right_hand': dict)
             ]
-    
+
     Returns:
         mocap_hand: dict with key in `fields`.
     """
@@ -115,8 +115,8 @@ def get_handmocap_detector(view_type='ego_centric'):
 """ Used by `obj_pose` """
 
 
-def compute_hand_transform(rot_axisang, 
-                           pred_hand_pose, 
+def compute_hand_transform(rot_axisang,
+                           pred_hand_pose,
                            pred_camera,
                            side: str):
     """
@@ -156,7 +156,7 @@ def cam_from_bbox(hand_bbox,
             This box should be used in mocap_predictor.
             hand bounding box XYWH in original image
             same as one_hand['bbox_processed']
-    
+
     Returns:
         hand_cam, global_cam: BatchCameraManager
     """
@@ -169,12 +169,12 @@ def cam_from_bbox(hand_bbox,
     fy = torch.ones_like(box_w) * fx
     cx = torch.zeros_like(box_w)
     cy = torch.zeros_like(box_w)
-    hand_crop_h = torch.ones_like(box_w) * hand_crop_h
+    hand_crop_h = torch.ones_like(box_w) * hand_crop_h  # 224
     hand_crop_w = torch.ones_like(box_w) * hand_crop_w
     hand_cam = BatchCameraManager(
-        fx=fx, fy=fy, cx=cx, cy=cy, img_h=box_h, img_w=box_w,
+        fx=fx, fy=fy, cx=cx, cy=cy, img_h=hand_crop_h, img_w=hand_crop_w,
         in_ndc=True
-    ).resize(hand_crop_h, hand_crop_w)
+    )
 
     _, _, hand_h, hand_w = torch.split(hand_bbox, [1, 1, 1, 1], dim=1)
     hand_h = hand_h.view(-1)
