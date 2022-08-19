@@ -1,7 +1,8 @@
+from typing import Tuple
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import neural_renderer as nr
-from scipy.ndimage.morphology import distance_transform_edt
 
 from nnutils.handmocap import get_hand_faces
 from homan.homan_ManoModel import HomanManoModel
@@ -319,7 +320,7 @@ class HOForwarderV2Impl(HOForwarderV2):
                          'pca': 1,
                          'rot': 1,
                          'transl': 1,
-                     }):
+                     }) -> Tuple[torch.Tensor, dict]:
         l_sil = self.loss_sil_hand(compute_iou=False, func='iou').sum()
         l_pca = self.loss_pca_interpolation().sum()
         l_rot = self.loss_hand_rot().sum()
@@ -358,7 +359,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         images = images.view(b, n, self.mask_size, self.mask_size)
         return images
 
-    def forward_obj_pose_render(self, loss_only=True, func='l2'):
+    def forward_obj_pose_render(self, loss_only=True, func='l2') -> dict:
         """ Reimplement the PoseRenderer.foward() 
         
         Returns:
@@ -382,7 +383,7 @@ class HOForwarderV2Impl(HOForwarderV2):
                 iou = batch_mask_iou(
                     image.view(b*n, w, w).detach(),
                     image_ref.repeat(1, n, 1, 1).view(b*n, w, w).detach())  # (B*N,)
-                iou = iou.view(b, n).mean(0)  # (N,)
+                iou = iou.view(b, n)  # (B, N)
         loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(verts)
         if not loss_only:
             return loss_dict, iou, image
@@ -423,6 +424,24 @@ class HOForwarderV2Impl(HOForwarderV2):
         return loss.view(b, n).mean(0)
     
     """ Hand-Object interaction """
+
+    def loss_center(self, obj_idx=0,
+                    verts_hand=None, verts_obj=None) -> torch.Tensor:
+        """
+        Args:
+            obj_idx: int
+            verts_hand: (B, V, 3)
+            verts_obj: (B, V, 3)
+        
+        Return:
+            distance between obj and hand center
+        """
+        if verts_hand is None:
+            verts_hand = self.get_verts_hand()
+        if verts_obj is None:
+            verts_obj = self.get_verts_object()[:, obj_idx]
+        center_loss = F.mse_loss(verts_hand.mean(1), verts_obj.mean(1))
+        return center_loss
 
 
 
