@@ -12,7 +12,6 @@ from nnutils import image_utils, geom_utils
 from nnutils.handmocap import (
     get_hand_wrapper, compute_hand_transform, cam_from_bbox)
 from obj_pose.pose_renderer import PoseRenderer
-from homan.lib3d.optitrans import TCO_init_from_boxes_zup_autodepth
 from homan.utils.geometry import (
     compute_random_rotations,
     matrix_to_rot6d,
@@ -22,7 +21,6 @@ from temporal.utils import init_6d_pose_from_bboxes
 from libzhifan.geometry import (
     SimpleMesh, projection
 )
-from libyana.lib3d import kcrop
 from libyana.visutils import imagify
 
 
