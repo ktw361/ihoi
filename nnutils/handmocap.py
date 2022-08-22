@@ -9,9 +9,9 @@ from handmocap.hand_bbox_detector import HandBboxDetector
 from nnutils import geom_utils
 from nnutils.hand_utils import ManopthWrapper
 
-from libzhifan.geometry import CameraManager, BatchCameraManager
+from libzhifan.geometry import BatchCameraManager
 
-from config.epic_constants import WEAK_CAM_FX, IMG_HEIGHT, IMG_WIDTH
+from config.epic_constants import IMG_HEIGHT, IMG_WIDTH, FRANKMOCAP_INPUT_SIZE
 
 
 """ ManopthWrapper"""
@@ -119,7 +119,7 @@ def compute_hand_transform(rot_axisang,
                            pred_hand_pose,
                            pred_camera,
                            side: str,
-                           hand_cam: CameraManager):
+                           hand_cam: BatchCameraManager):
     """
     Args:
         rot_axisang: (B, 3)
@@ -142,16 +142,16 @@ def compute_hand_transform(rot_axisang,
     s, tx, ty = torch.split(pred_camera, [1, 1, 1], dim=1)
     device = tx.device
 
-    fx = torch.as_tensor(hand_cam.fx, device=device)
-    fy = torch.as_tensor(hand_cam.fy, device=device)
-    cx = torch.as_tensor(hand_cam.cx, device=device)
-    cy = torch.as_tensor(hand_cam.cy, device=device)
-    SW = s * 224/2
-    tx = tx + 1/s - cx/SW
-    ty = ty + 1/s - cy/SW # - cy / fy + cy/fy
-    tz = fx / (s * 224/2)
-    print(fx, fy, cx, cy)
-    # translate = torch.cat([tx, ty, fx/s], dim=1)
+    fx, fy, cx, cy, _, _ = hand_cam.unpack()
+    fx, fy, cx, cy = map(
+        lambda x: torch.as_tensor(x, device=device).view_as(s),
+        (fx, fy, cx, cy))
+    f = (fx + fy) / 2  # How to enforce fx=fy?
+
+    sw  = s * FRANKMOCAP_INPUT_SIZE /2  # s*w/2
+    tx = tx + 1/s - cx / sw
+    ty = ty + 1/s - cy / sw
+    tz = f / sw
     translation = torch.cat([tx, ty, tz], dim=1)
     translation = translation - joints[:, 5]
     rotation_row = rotation.transpose(1, 2)
@@ -159,7 +159,7 @@ def compute_hand_transform(rot_axisang,
 
 
 def cam_from_bbox(hand_bbox,
-                  fx=WEAK_CAM_FX,
+                  fx, # =WEAK_CAM_FX,
                   img_height=IMG_HEIGHT,
                   img_width=IMG_WIDTH) -> Tuple[BatchCameraManager, BatchCameraManager]:
     """

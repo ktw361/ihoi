@@ -15,7 +15,8 @@ from homan.ho_utils import (
 
 import roma
 from libzhifan.geometry import (
-    SimpleMesh, visualize_mesh, projection, CameraManager)
+    SimpleMesh, visualize_mesh, projection, CameraManager, 
+    BatchCameraManager)
 from libzhifan.numeric import check_shape
 
 from libyana.conversions import npt
@@ -454,9 +455,9 @@ def init_hand_forwarder(one_hands,
                         side: str, 
                         obj_bboxes,
                         hand_masks,
-                        cam_global: CameraManager) -> HandForwarder:
+                        global_cam: BatchCameraManager) -> HandForwarder:
     pose_machine = PoseOptimizer(
-        one_hands, obj_loader=None, side=side, global_cam=cam_global)
+        one_hands, obj_loader=None, side=side, global_cam=global_cam)
 
     _, image_patch, hand_mask_patch = pose_machine.finalize_without_fit(
         images, obj_bboxes, hand_masks)

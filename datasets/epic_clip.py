@@ -13,6 +13,7 @@ from datasets.epic_lib.epic_utils import (
     read_epic_image, read_mask_with_occlusion)
 
 from libzhifan.odlib import xyxy_to_xywh, xywh_to_xyxy
+from libzhifan.geometry import CameraManager, BatchCameraManager
 
 epic_cats = [
     '_bg',
@@ -136,6 +137,16 @@ class EpicClipDataset(Dataset):
 
     def _get_obj_box(self, vid, frame_idx, cat):
         return self.ho_boxes[vid][frame_idx][cat]
+
+    def get_camera(self, index=-1) -> BatchCameraManager:
+        global_cam = CameraManager(
+            # fx=1050, fy=1050, cx=960, cy=540,
+            fx=1050, fy=1050, cx=1280, cy=0,
+            img_h=1080, img_w=1920)
+        new_w, new_h = self.image_size
+        global_cam = global_cam.resize(new_h=new_h, new_w=new_w)
+        batch_global_cam = global_cam.repeat(self.sample_frames, device='cpu')
+        return batch_global_cam
 
     def __getitem__(self, index):
         """

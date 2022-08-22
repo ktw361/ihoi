@@ -10,7 +10,7 @@ from pytorch3d.transforms import Transform3d
 
 from nnutils import image_utils, geom_utils
 from nnutils.handmocap import (
-    get_hand_wrapper, compute_hand_transform, cam_from_bbox)
+    get_hand_wrapper, compute_hand_transform)
 from obj_pose.pose_renderer import PoseRenderer
 from homan.utils.geometry import (
     compute_random_rotations,
@@ -24,7 +24,7 @@ from libzhifan.geometry import (
 from libyana.visutils import imagify
 
 
-from config.epic_constants import REND_SIZE
+from config.epic_constants import REND_SIZE, FRANKMOCAP_INPUT_SIZE
 
 """
 Refinement-based pose optimizer.
@@ -77,13 +77,11 @@ class PoseOptimizer:
         _hand_bbox_proc = one_hand['bbox_processed']
         rot_axisang, _pred_hand_pose = _pred_hand_pose[:, :3], _pred_hand_pose[:, 3:]
 
-        # _, _, hand_w, hand_h = torch.split(_hand_bbox_proc, [1, 1, 1, 1], dim=1)
-        hand_sz = torch.ones_like(global_cam.fx) * 224
+        hand_sz = torch.ones_like(global_cam.fx) * FRANKMOCAP_INPUT_SIZE
         hand_cam = global_cam.crop(_hand_bbox_proc).resize(new_w=hand_sz, new_h=hand_sz)
         self._hand_rotation, self._hand_translation = compute_hand_transform(
             rot_axisang, _pred_hand_pose, pred_camera, side=side, 
             hand_cam=hand_cam)
-        # hand_cam, global_cam = cam_from_bbox(_hand_bbox_proc, cam_global=cam_global)
 
         self._pred_hand_pose = _pred_hand_pose  # (B, 45)
         self._pred_hand_betas = _pred_hand_betas
