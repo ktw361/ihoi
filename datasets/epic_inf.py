@@ -9,6 +9,7 @@ from datasets.epic_lib.epic_utils import (
     read_epic_image, read_mask_with_occlusion)
 from datasets.epic_lib import epichoa
 
+from libzhifan.geometry import CameraManager
 
 """ Epic-Kitchens Inference Dataset """
 
@@ -102,6 +103,25 @@ class EpicInference(Dataset):
         """
         vid, _, frame_idx, _, _ = self.data_infos[index]
         return vid, frame_idx
+
+    def get_camera(self, index=-1) -> CameraManager:
+        # camera = CameraManager(
+        #     fx=7300, fy=7250, cx=887, cy=150.5, img_h=720, img_w=1280)
+        # camera = CameraManager(
+        #     fx=730, fy=725, cx=887, cy=150.5, img_h=720, img_w=1280,
+        # )
+        # return camera
+
+        # camera = CameraManager(
+        #     fx=700, fy=700, cx=640, cy=150, img_h=720, img_w=1280)
+        # return camera
+        cam_global = CameraManager(
+            # fx=1050, fy=1050, cx=960, cy=540,
+            fx=1050, fy=1050, cx=1280, cy=0,
+            img_h=1080, img_w=1920)
+
+        new_w, new_h = self.image_size
+        return cam_global.resize(new_h=new_h, new_w=new_w)
 
     def __getitem__(self, index):
         """ 

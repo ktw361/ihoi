@@ -19,7 +19,7 @@ from homan.utils.geometry import (
 from temporal.utils import init_6d_pose_from_bboxes
 
 from libzhifan.geometry import (
-    SimpleMesh, projection
+    SimpleMesh, projection, BatchCameraManager
 )
 from libyana.visutils import imagify
 
@@ -52,17 +52,16 @@ class PoseOptimizer:
                  one_hand,
                  obj_loader,
                  side,
+                 global_cam: BatchCameraManager,
                  ihoi_box_expand=1.0,
                  rend_size=REND_SIZE,
                  device='cuda'):
         """
         Args:
-            hand_wrapper: Non flat ManoWrapper
-                e.g.
-                    hand_wrapper = ManopthWrapper(
-                        flat_hand_mean=False,
-                        use_pca=False,
-                        )
+            one_hand: dict with fields in (T, D)
+            global_cam: global_cam for each frame should be identitcal
+                but ihoi_cam for each frame is different due to 
+                different cropping region
 
         """
         self.obj_loader = obj_loader
@@ -78,14 +77,17 @@ class PoseOptimizer:
         _hand_bbox_proc = one_hand['bbox_processed']
         rot_axisang, _pred_hand_pose = _pred_hand_pose[:, :3], _pred_hand_pose[:, 3:]
 
+        # _, _, hand_w, hand_h = torch.split(_hand_bbox_proc, [1, 1, 1, 1], dim=1)
+        hand_sz = torch.ones_like(global_cam.fx) * 224
+        hand_cam = global_cam.crop(_hand_bbox_proc).resize(new_w=hand_sz, new_h=hand_sz)
         self._hand_rotation, self._hand_translation = compute_hand_transform(
-            rot_axisang, _pred_hand_pose, pred_camera, side=side)
-        _hand_verts = self._calc_hand_mesh(_pred_hand_pose)
-        hand_cam, global_cam = cam_from_bbox(_hand_bbox_proc)
+            rot_axisang, _pred_hand_pose, pred_camera, side=side, 
+            hand_cam=hand_cam)
+        # hand_cam, global_cam = cam_from_bbox(_hand_bbox_proc, cam_global=cam_global)
 
         self._pred_hand_pose = _pred_hand_pose  # (B, 45)
         self._pred_hand_betas = _pred_hand_betas
-        self._hand_verts = _hand_verts
+        self._hand_verts = self._calc_hand_mesh(_pred_hand_pose)
 
         self._hand_cam = hand_cam
         self._hand_bbox_proc = _hand_bbox_proc
@@ -184,15 +186,16 @@ class PoseOptimizer:
                 - 'hand': render using camera from frankMocap bbox
         """
         hand_mesh = self.hand_simplemesh(cam_idx=cam_idx)
-        if clustered:
-            verts = self.pose_model.clustered_results(
-                self.NUM_CLUSTERS).verts
-        else:
-            verts = self.pose_model.fitted_results.verts
-        verts = verts[cam_idx, pose_idx]
-        obj_mesh = SimpleMesh(verts,
-                              self.pose_model.faces,
-                              tex_color='yellow')
+        if with_obj:
+            if clustered:
+                verts = self.pose_model.clustered_results(
+                    self.NUM_CLUSTERS).verts
+            else:
+                verts = self.pose_model.fitted_results.verts
+            verts = verts[cam_idx, pose_idx]
+            obj_mesh = SimpleMesh(verts,
+                                self.pose_model.faces,
+                                tex_color='yellow')
         mesh_list = []
         if with_hand:
             mesh_list.append(hand_mesh)

@@ -12,7 +12,6 @@ from homan.lossutils import iou_loss, rotation_loss_v1
 from homan.utils.geometry import matrix_to_rot6d, rot6d_to_matrix
 from homan.ho_utils import (
     compute_transformation_ortho, compute_transformation_persp)
-from nnutils.hand_utils import ManopthWrapper
 
 import roma
 from libzhifan.geometry import (
@@ -454,9 +453,10 @@ def init_hand_forwarder(one_hands,
                         images, 
                         side: str, 
                         obj_bboxes,
-                        hand_masks) -> HandForwarder:
+                        hand_masks,
+                        cam_global: CameraManager) -> HandForwarder:
     pose_machine = PoseOptimizer(
-        one_hands, obj_loader=None, side=side)
+        one_hands, obj_loader=None, side=side, global_cam=cam_global)
 
     _, image_patch, hand_mask_patch = pose_machine.finalize_without_fit(
         images, obj_bboxes, hand_masks)

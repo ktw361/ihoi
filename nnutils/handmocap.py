@@ -9,7 +9,7 @@ from handmocap.hand_bbox_detector import HandBboxDetector
 from nnutils import geom_utils
 from nnutils.hand_utils import ManopthWrapper
 
-from libzhifan.geometry import BatchCameraManager
+from libzhifan.geometry import CameraManager, BatchCameraManager
 
 from config.epic_constants import WEAK_CAM_FX, IMG_HEIGHT, IMG_WIDTH
 
@@ -118,7 +118,8 @@ def get_handmocap_detector(view_type='ego_centric'):
 def compute_hand_transform(rot_axisang,
                            pred_hand_pose,
                            pred_camera,
-                           side: str):
+                           side: str,
+                           hand_cam: CameraManager):
     """
     Args:
         rot_axisang: (B, 3)
@@ -138,10 +139,21 @@ def compute_hand_transform(rot_axisang,
     _, joints = get_hand_wrapper(side)(
         glb_rot,
         pred_hand_pose, return_mesh=True)
-    fx = WEAK_CAM_FX
     s, tx, ty = torch.split(pred_camera, [1, 1, 1], dim=1)
-    translate = torch.cat([tx, ty, fx/s], dim=1)
-    translation = translate - joints[:, 5]
+    device = tx.device
+
+    fx = torch.as_tensor(hand_cam.fx, device=device)
+    fy = torch.as_tensor(hand_cam.fy, device=device)
+    cx = torch.as_tensor(hand_cam.cx, device=device)
+    cy = torch.as_tensor(hand_cam.cy, device=device)
+    SW = s * 224/2
+    tx = tx + 1/s - cx/SW
+    ty = ty + 1/s - cy/SW # - cy / fy + cy/fy
+    tz = fx / (s * 224/2)
+    print(fx, fy, cx, cy)
+    # translate = torch.cat([tx, ty, fx/s], dim=1)
+    translation = torch.cat([tx, ty, tz], dim=1)
+    translation = translation - joints[:, 5]
     rotation_row = rotation.transpose(1, 2)
     return rotation_row, translation[:, None]
 
