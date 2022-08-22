@@ -555,11 +555,12 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         # Add mask
         all_mask = np.zeros_like(img, dtype=np.float32)
         mask_hand = self.ref_mask_hand[scene_idx].cpu().numpy().squeeze()
-        mask_obj = self.ref_mask_object[scene_idx].cpu().numpy()
         all_mask = np.where(
             mask_hand[...,None], (0, 0, 0.8), all_mask)
-        all_mask = np.where(
-            mask_obj[...,None], (0.6, 0, 0), all_mask)
+        if obj_idx >= 0:
+            mask_obj = self.ref_mask_object[scene_idx].cpu().numpy()
+            all_mask = np.where(
+                mask_obj[...,None], (0.6, 0, 0), all_mask)
         all_mask = np.uint8(255*all_mask)
         img = cv2.addWeighted(np.uint8(img*255), 0.9, all_mask, 0.5, 1.0)
         return img

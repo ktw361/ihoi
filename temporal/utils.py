@@ -48,13 +48,14 @@ def init_6d_pose_from_bboxes(bboxes: torch.Tensor,
     """ V_out = (V_model @ R + T) @ R_base + T_base """
     V_rotated = torch.matmul(
         (verts @ rotations).unsqueeze_(0),
-        base_rotation.unsqueeze(1))
+        base_rotation.unsqueeze(1))  # (B, N_init, V, 3)
 
     translations_init = []
     for i in range(bsize):
         _translations_init = TCO_init_from_boxes_zup_autodepth(
-            bboxes[i], V_rotated[i], cam_mat[i]).unsqueeze_(1)
-        _translations_init -= base_translation[i]
+            bboxes[[i],...], V_rotated[i], cam_mat[[i],...], 
+            ).unsqueeze_(1)
+        _translations_init -= base_translation[i]  # (N, 1, 3) - (1, 1, 3)
         _translations_init = _translations_init @ base_rotation[i].T  # inv
         translations_init.append(_translations_init)
     if cam_mat.size(0) == 1:

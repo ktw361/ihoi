@@ -39,6 +39,7 @@ def main(index=1):
     index = 1
     info = dataset.data_infos[index]
     images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat = dataset[index]
+    global_cam = dataset.get_camera(index)
 
     """ Process all hands """
     mocap_predictions = []
@@ -58,9 +59,11 @@ def main(index=1):
                                                       :3], pred_hand_full_pose[:, 3:]
     mano_pca_pose = recover_pca_pose(pred_hand_pose, side)
 
+    hand_sz = torch.ones_like(global_cam.fx) * 224
+    hand_cam = global_cam.crop(hand_bbox_proc).resize(new_w=hand_sz, new_h=hand_sz)
     hand_rotation, hand_translation = compute_hand_transform(
-        rot_axisang, pred_hand_pose, pred_camera, side)
-    hand_cam, global_cam = cam_from_bbox(hand_bbox_proc)
+        rot_axisang, pred_hand_pose, pred_camera, side,
+        hand_cam=hand_cam)
 
     """ Extract mask input """
     ihoi_box_expand = 1.0
@@ -98,7 +101,7 @@ def main(index=1):
     obj_mesh = obj_loader.load_obj_by_name(cat, return_mesh=False)
     vertices = torch.as_tensor(obj_mesh.vertices, device='cuda')
     faces = torch.as_tensor(obj_mesh.faces, device='cuda')
-    num_initializations = 1
+    num_initializations = 2
     K_global = global_cam.get_K()
 
     device = 'cuda'

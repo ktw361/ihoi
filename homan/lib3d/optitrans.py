@@ -3,7 +3,8 @@
 import numpy as np
 import torch
 
-from libyana.conversions import npt
+from libzhifan.numeric import check_shape
+from libzhifan.odlib import xywh_to_xyxy
 from libyana.camutils import project
 
 
@@ -87,42 +88,31 @@ def TCO_init_from_boxes_zup_autodepth(boxes_2d: torch.Tensor,
     """
 
     Args:
-        boxes_2d: (B, 4), torch.float64
-        model_points_3d : (B, V, 3), e.g. V=5634, torch.float32
-        K: (B, 3, 3) _description_
+        boxes_2d: (1, 4), torch.float64
+        model_points_3d : (N, V, 3), e.g. V=5634, torch.float32
+        K: (1, 3, 3) global camera
 
     Returns:
-        translation: (3,)
+        translation: (N, 3)
     """
-    # User in BOP20 challenge
-    model_points_3d = npt.tensorify(model_points_3d)
-    bsz = model_points_3d.shape[0]
-    device = model_points_3d.device
-    K = npt.tensorify(K).to(device)
-    boxes_2d = npt.tensorify(boxes_2d).to(device)
-    if boxes_2d.dim() == 1:
-        boxes_2d = boxes_2d.unsqueeze(0)
-    if boxes_2d.shape[0] != bsz:
-        boxes_2d = boxes_2d.repeat(bsz, 1)
-    if K.dim() == 2:
-        K = K.unsqueeze(0)
-    if K.shape[0] != bsz:
-        K = K.repeat(bsz, 1, 1)
+    check_shape(boxes_2d, (1, 4))
+    check_shape(model_points_3d, (-1, -1, 3))
+    check_shape(K, (1, 3, 3))
 
-    assert boxes_2d.shape[-1] == 4
-    assert boxes_2d.dim() == 2
-    # xywh to xyxy
-    boxes_2d = torch.stack([
-        boxes_2d[:, 0], boxes_2d[:, 1], boxes_2d[:, 0] + boxes_2d[:, 2],
-        boxes_2d[:, 1] + boxes_2d[:, 3]
-    ], 1)
+    # User in BOP20 challenge
+    num = model_points_3d.shape[0]
+    device = model_points_3d.device
+    boxes_2d = boxes_2d.repeat(num, 1).to(device)
+    K = K.repeat(num, 1, 1).to(device)
+
+    boxes_2d = xywh_to_xyxy(boxes_2d)
     # Get length of reference bbox diagonal
     diag_bb = (boxes_2d[:, [2, 3]] - boxes_2d[:, [0, 1]]).norm(2, -1)
     # Get center of reference bbox
     bb_xy_centers = (boxes_2d[:, [0, 1]] + boxes_2d[:, [2, 3]]) / 2
     fxfy = K[:, [0, 1], [0, 1]]
     cxcy = K[:, [0, 1], [2, 2]]
-    z = fxfy.new_ones(bsz, 1)
+    z = fxfy.new_ones(num, 1)
     xy_init = ((bb_xy_centers - cxcy) * z) / fxfy
     trans = torch.cat([xy_init, z], 1)
     for _ in range(10):
