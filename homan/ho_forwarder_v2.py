@@ -449,6 +449,8 @@ from typing import List, Tuple
 import numpy as np
 from libzhifan.geometry import SimpleMesh, visualize_mesh, projection, CameraManager
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('svg')  # seems svg renders plt faster
 import cv2
 
 
@@ -514,7 +516,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             mobj.apply_translation_([t * disp, 0, 0])
             meshes.append(mhand)
             meshes.append(mobj)
-        return visualize_mesh(meshes, show_axis=show_axis)
+        return visualize_mesh(meshes, show_axis=show_axis, viewpoint=viewpoint)
 
     def render_summary(self, scene_idx, obj_idx=0) -> np.ndarray:
         a1 = np.uint8(self.ihoi_img_patch[scene_idx])
@@ -604,13 +606,42 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         )
         return np.hstack([front, left, back])
 
-    def render_grid(self, obj_idx=0, with_hand=True):
+    def render_grid_np(self, obj_idx=0, with_hand=True, *args, **kwargs):
+        """ low resolution but faster """
+        l = self.bsize
+        num_cols = 5
+        num_rows = (l + num_cols - 1) // num_cols
+        imgs = []
+        for cam_idx in range(l):
+            img = self.render_scene(
+                scene_idx=cam_idx, obj_idx=obj_idx, with_hand=with_hand)
+            imgs.append(img)
+            if cam_idx == l-1:
+                break
+
+        h, w, _ = imgs[0].shape
+        out = np.empty(shape=(num_rows*h, num_cols*w, 3), dtype=imgs[0].dtype)
+        for row in range(num_rows):
+            for col in range(num_cols):
+                out[row*h:(row+1)*h, col*w:(col+1)*w, ...] = imgs[row*num_cols+col]
+
+        return out
+
+    def render_grid(self, obj_idx=0, with_hand=True,
+                    figsize=(10, 10), low_reso=True):
+        if low_reso:
+            out = self.render_grid_np(obj_idx=obj_idx, with_hand=with_hand)
+            fig, ax = plt.subplots()
+            ax.imshow(out)
+            plt.axis('off')
+            return fig
+
         l = self.bsize
         num_cols = 5
         num_rows = (l + num_cols - 1) // num_cols
         fig, axes = plt.subplots(
             nrows=num_rows, ncols=num_cols,
-            sharex=True, sharey=True, figsize=(20, 20))
+            sharex=True, sharey=True, figsize=figsize)
         for cam_idx, ax in enumerate(axes.flat, start=0):
             img = self.render_scene(
                 scene_idx=cam_idx, obj_idx=obj_idx, with_hand=with_hand)
