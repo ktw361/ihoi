@@ -1,8 +1,8 @@
-import os
-import os.path as osp
-
-import numpy as np
+import argparse
+import tqdm
 import torch
+from datetime import datetime
+from torch.utils import tensorboard
 from datasets.epic_clip import EpicClipDataset
 from homan.ho_forwarder_v2 import HOForwarderV2Impl, HOForwarderV2Vis
 from homan.utils.geometry import matrix_to_rot6d, rot6d_to_matrix
@@ -11,14 +11,11 @@ from nnutils.handmocap import (
     get_handmocap_predictor,
     collate_mocap_hand,
     recover_pca_pose, compute_hand_transform,
-    cam_from_bbox
 )
 
-from obj_pose.pose_optimizer import PoseOptimizer, SavedContext
 from obj_pose.obj_loader import OBJLoader
 
 from nnutils import image_utils
-from temporal.fit_sequence import init_ho_forwarder
 from temporal.optim_plan import (
     optimize_hand, smooth_hand_pose, find_optimal_obj_pose,
     optimize_hand_allmask)
@@ -26,17 +23,52 @@ from temporal.utils import init_6d_pose_from_bboxes
 from temporal import visualize
 
 
-def main(index=1):
+def get_args():
+    parser = argparse.ArgumentParser(
+        description="Simple Epic inference")
+    parser.add_argument(
+        "index", type=int, default=5,
+        help="Index into gt_clips.json")
+    parser.add_argument(
+        "--image_sets",
+        default='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json')
+
+    args = parser.parse_args()
+    return args
+
+
+def main(args):
     dataset = EpicClipDataset(
         image_sets='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json',
-        sample_frames=20,
-    )
+        sample_frames=20)
 
-    device = 'cuda'
     obj_loader = OBJLoader()
     hand_predictor = get_handmocap_predictor()
+    writer = tensorboard.writer.SummaryWriter(
+        log_dir=f"runs/{datetime.now().strftime('%m-%d_%H:%M')}")
 
-    index = 1
+    if args.index >= 0:
+        fit_scene(dataset, hand_predictor, obj_loader,
+                  args.index, writer)
+        writer.close()
+        return
+    
+    for index in tqdm.trange(len(dataset)):
+        try:
+            fit_scene(dataset, hand_predictor, obj_loader,
+                      index, writer)
+        except:
+            continue
+
+    writer.close()
+
+
+def fit_scene(dataset, 
+              hand_predictor,
+              obj_loader,
+              index: int,
+              writer=None): 
+    device = 'cuda'
     info = dataset.data_infos[index]
     images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat = dataset[index]
     global_cam = dataset.get_camera(index)
@@ -101,7 +133,7 @@ def main(index=1):
     obj_mesh = obj_loader.load_obj_by_name(cat, return_mesh=False)
     vertices = torch.as_tensor(obj_mesh.vertices, device='cuda')
     faces = torch.as_tensor(obj_mesh.faces, device='cuda')
-    num_initializations = 2
+    num_initializations = 1
     K_global = global_cam.get_K()
 
     device = 'cuda'
@@ -115,13 +147,16 @@ def main(index=1):
         translations_object=translations,
         rotations_object=rotations,
         verts_object_og=vertices,
-        faces_object=faces
+        faces_object=faces,
+        scale_object=1.0,
     )
 
     homan.set_obj_target(obj_mask_patch)
 
-    homan = optimize_hand_allmask(homan, num_steps=30)
+    homan.info = info
+    homan = optimize_hand_allmask(
+        homan, num_steps=250, vis_interval=10, writer=writer)
 
 
 if __name__ == '__main__':
-    main()
+    main(get_args())

@@ -266,6 +266,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         super().__init__(*args, **kwargs)
     
     def loss_sil_hand(self, compute_iou=False, func='iou'):
+        """ returns: (B,) """
         rend = self.renderer(
             self.get_verts_hand(),
             self.faces_hand,
@@ -364,8 +365,8 @@ class HOForwarderV2Impl(HOForwarderV2):
         
         Returns:
             loss_dict: dict with
-                - mask: (N,)
-                - offscreen: (N,)
+                - mask: (B,N)
+                - offscreen: (B,N)
         """
         b, n, w = self.bsize, self.num_obj_init, self.mask_size
         verts = self.get_verts_object()
@@ -373,9 +374,9 @@ class HOForwarderV2Impl(HOForwarderV2):
         image_ref = self.ref_mask_object[:, None]  # (B, 1, W, W)
         loss_dict = {}
         if func == 'l2':
-            loss_mask = torch.sum((image - image_ref)**2, dim=(2, 3)).mean(dim=0)
+            loss_mask = torch.sum((image - image_ref)**2, dim=(2, 3)) #.sum(dim=0)
         elif func == 'iou':
-            loss_mask = iou_loss(image, image_ref).mean(dim=0)
+            loss_mask = iou_loss(image, image_ref) #.sum(dim=0)
 
         loss_dict["mask"] = loss_mask
         if not loss_only:
@@ -399,7 +400,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             verts: (B, N, V, 3)
 
         Returns:
-            loss: (N,)
+            loss: (B,N)
         """
         # On-screen means coord_xy between [-1, 1] and far > depth > 0
         b, n = verts.size(0), verts.size(1)
@@ -421,7 +422,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         behind = torch.max(-coord_z, zeros).sum(dim=(1, 2))
         too_far = torch.max(coord_z - self.renderer.far, zeros).sum(dim=(1, 2))
         loss = lower_right + upper_left + behind + too_far  # (B*N)
-        return loss.view(b, n).mean(0)
+        return loss.view(b, n)
     
     """ Hand-Object interaction """
 
@@ -606,7 +607,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         )
         return np.hstack([front, left, back])
 
-    def render_grid_np(self, obj_idx=0, with_hand=True, *args, **kwargs):
+    def render_grid_np(self, obj_idx=0, with_hand=True, *args, **kwargs) -> np.ndarray:
         """ low resolution but faster """
         l = self.bsize
         num_cols = 5

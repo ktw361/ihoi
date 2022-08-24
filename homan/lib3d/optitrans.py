@@ -117,7 +117,10 @@ def TCO_init_from_boxes_zup_autodepth(boxes_2d: torch.Tensor,
     trans = torch.cat([xy_init, z], 1)
     for _ in range(10):
         C_pts_3d = model_points_3d + trans.unsqueeze(1)
-        proj_pts = project.batch_proj2d(C_pts_3d, K)
+        C_pts_3d = C_pts_3d / C_pts_3d[:, :, 2:]
+        proj_pts = K.bmm(C_pts_3d.transpose(1, 2)).transpose(1, 2)
+        proj_pts = proj_pts[..., :2]
+        # proj_pts = project.batch_proj2d(C_pts_3d, K)
         diag_proj = (proj_pts.min(1)[0] - proj_pts.max(1)[0]).norm(2, -1)
         proj_xy_centers = (proj_pts.min(1)[0] + proj_pts.max(1)[0]) / 2
 

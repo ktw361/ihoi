@@ -145,14 +145,17 @@ def find_optimal_obj_pose(homan: HOForwarderV2Impl,
 def optimize_hand_allmask(homan: HOForwarderV2Vis,
                           lr=1e-2,
                           num_steps=100,
-                          verbose=True,
-                          vis_interval=-1):
+                          vis_interval=-1,
+                          writer=None):
+    info = homan.info
+    prefix = f'{info.vid}_{info.gt_frame}'
+
     optimizer = torch.optim.Adam([
         {
             'params': [
                 homan.rotations_hand,
-                # homan.translations_hand,
-                # homan.rotations_object,
+                homan.translations_hand,
+                homan.rotations_object,
                 homan.translations_object,
                 homan.scale_object,
             ],
@@ -163,60 +166,40 @@ def optimize_hand_allmask(homan: HOForwarderV2Vis,
     with tqdm.tqdm(total=num_steps) as loop:
         for step in range(num_steps):
             optimizer.zero_grad()
-            l_sil_hand = homan.loss_sil_hand(compute_iou=False, func='l2')
-            l_obj_dict = homan.forward_obj_pose_render(loss_only=True, func='l2')
-            tot_loss = l_sil_hand.sum() + 0.1 * sum(l_obj_dict.values()).sum()
+            l_sil_hand = homan.loss_sil_hand(compute_iou=False, func='iou')  # (B,)
+            l_obj_dict = homan.forward_obj_pose_render(loss_only=True, func='iou')  # (B,N)
+            l_obj_mask = l_obj_dict['mask']
+            l_obj_offscreen = l_obj_dict['offscreen']
+            tot_loss = l_sil_hand.sum() + 0.1 * (l_obj_mask.sum() + l_obj_offscreen.sum())
 
             if vis_interval > 0 and step % vis_interval == 0:
-                _ = homan.render_grid(obj_idx=0, low_reso=True)
+                if writer is None:
+                    _ = homan.render_grid(obj_idx=0, low_reso=True)
+                else:
+                    img = homan.render_grid_np(obj_idx=0)
+                    writer.add_image(tag=f'{prefix}', 
+                                     img_tensor=img.transpose(2, 0, 1),
+                                     global_step=step)
+
+                    scalar_dict = dict()
+                    scalar_dict['tot_loss'] = tot_loss.item()
+                    for b in range(homan.bsize):
+                        scalar_dict.update({
+                            f'hand_{b}': l_sil_hand[b].item(),
+                            f'obj_{b}': l_obj_mask[b].item() + l_obj_offscreen[b].item()
+                        })
+                    writer.add_scalars(
+                        main_tag=f'{prefix}', global_step=step,
+                        tag_scalar_dict=scalar_dict)
 
             tot_loss.backward()
             optimizer.step()
             loop.set_description(f"obj loss: {tot_loss.item():.3g}")
             loop.update()
+
+    writer.add_figure(tag=f'{prefix}_final', 
+                      figure=homan.render_grid(),
+                      global_step=step)
+    writer.flush()
     
     return homan
-
-# def optimize_scale(homan,
-#                    num_steps=100,
-#                    lr=1e-2,
-#                    verbose=False) -> HOForwarder:
-#     scale_weights = dict(
-#         lw_pca=0.0,
-#         lw_collision=1.0,
-#         lw_contact=1.0,
-#         lw_sil_obj=1.0,
-#         lw_sil_hand=0.0,
-#         lw_inter=1.0,
-
-#         lw_scale_obj=0.0,  # mean deviation loss
-#         lw_scale_hand=0.0,
-#         lw_depth=1.0
-#     )
-
-#     optimizer = torch.optim.Adam([
-#         {
-#             'params': [homan.scale_object],
-#             'lr': lr
-#         }
-#     ])
-
-#     for step in range(num_steps):
-#         optimizer.zero_grad()
-#         loss_dict, metric_dict = homan(loss_weights=scale_weights)
-#         loss_dict_weighted = {
-#             k: loss_dict[k] * scale_weights[k.replace("loss", "lw")]
-#             for k in loss_dict
-#         }
-#         loss = sum(loss_dict_weighted.values())
-#         if verbose and step % 10 == 0:
-#             print(f"Step {step}, total loss = {loss.item():.05f}: ", end='')
-#             for k, v in loss_dict_weighted.items():
-#                 print(f"{k.replace('loss_', '')}, {v.item():.05f}", end=', ')
-#             print('\n', end='')
-#             print(f"scale={homan.scale_object.item()}")
-
-#         loss.backward()
-#         optimizer.step()
-
-#     return homan
