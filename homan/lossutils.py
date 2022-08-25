@@ -2,18 +2,13 @@ from typing import List
 import numpy as np
 import torch
 
+from pytorch3d.loss import chamfer_distance
 from homan.interactions import contactloss, scenesdf
 
-from libyana.visutils import imagify
 
 # MANO_CLOSED_FACES = np.array(
 #     trimesh.load("extra_data/mano/closed_fmano.obj", process=False).faces)
 MANO_CLOSED_FACES = np.load("homan/local_data/closed_fmano.npy")
-
-
-def compute_smooth_loss(verts_hand,
-                        verts_obj):
-    raise NotImplementedError
 
 
 def compute_pca_loss(mano_pca_comps):
@@ -65,7 +60,20 @@ def compute_contact_loss(verts_hand_b, verts_object_b, faces_object,
     else:
         missed_loss, contact_loss, _, _ = contactloss.compute_contact_loss(
             verts_hand_b, faces_hand_closed, verts_object_b, faces_object)
-    return {"contact": missed_loss + contact_loss}, None
+    return {"contact": missed_loss + contact_loss}
+
+
+def compute_chamfer_distance(verts_a, verts_b, batch_reduction='sum') -> torch.Tensor:
+    """
+    Args:
+        verts_a: (B, Va, 3)
+        verts_b: (B, Vb, 3)
+
+    Returns:
+        dist: scalar
+    """
+    dist, _ = chamfer_distance(verts_a, verts_b, batch_reduction=batch_reduction)
+    return dist
 
 
 def compute_ordinal_depth_loss(masks:torch.Tensor, 
