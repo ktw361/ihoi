@@ -413,7 +413,7 @@ class HOForwarder(nn.Module):
             loss_dict.update(loss_coll)
 
         if loss_weights is None or loss_weights["contact"] > 0:
-            loss_contact, _ = lossutils.compute_contact_loss(
+            loss_contact = lossutils.compute_contact_loss(
                 verts_hand_b=verts_hand_det_scale,
                 verts_object_b=verts_object,
                 faces_object=self.faces_object,

@@ -54,11 +54,8 @@ def main(args):
         return
     
     for index in tqdm.trange(len(dataset)):
-        try:
-            fit_scene(dataset, hand_predictor, obj_loader,
-                      index, writer)
-        except:
-            continue
+        fit_scene(dataset, hand_predictor, obj_loader,
+                    index, writer)
 
     writer.close()
 
@@ -125,15 +122,16 @@ def fit_scene(dataset,
     homan.set_hand_target(target_masks_hand=hand_mask_patch)
     """
     Step 1. Interpolate pca_pose
-    Step 2. Fit hand_mask
+    Step 2. Optimize hand_mask
     """
+    print("Optimize hand")
     homan = smooth_hand_pose(homan, lr=0.1)
-    homan = optimize_hand(homan)
+    homan = optimize_hand(homan, verbose=False)
 
     obj_mesh = obj_loader.load_obj_by_name(cat, return_mesh=False)
     vertices = torch.as_tensor(obj_mesh.vertices, device='cuda')
     faces = torch.as_tensor(obj_mesh.faces, device='cuda')
-    num_initializations = 1
+    num_initializations = 200
     K_global = global_cam.get_K()
 
     device = 'cuda'
@@ -148,11 +146,20 @@ def fit_scene(dataset,
         rotations_object=rotations,
         verts_object_og=vertices,
         faces_object=faces,
-        scale_object=1.0,
-    )
-
+        scale_object=1.0)
     homan.set_obj_target(obj_mask_patch)
-
+    
+    """
+    Optional?
+    Step 3. Optimize object mask with one frame, find best object rot + trans
+    """
+    # homan = find_optimal_obj_pose(homan, cam_idx=0)
+    # homan.rotations_object = torch.nn.Parameter(homan.rotations_object[[0],...])
+    # homan.translations_object = torch.nn.Parameter(homan.translations_object[[0],...])
+    # torch.cuda.empty_cache()
+    """
+    Step 4. Optimize both hand+object mask using best object pose
+    """
     homan.info = info
     homan = optimize_hand_allmask(
         homan, num_steps=250, vis_interval=10, writer=writer)

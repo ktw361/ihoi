@@ -131,3 +131,56 @@ def TCO_init_from_boxes_zup_autodepth(boxes_2d: torch.Tensor,
         xy_init += ((bb_xy_centers - proj_xy_centers) * z) / fxfy
         trans = torch.cat([xy_init, z], 1)
     return trans
+
+
+# Warning: unused?
+def batch_TCO_init(boxes_2d: torch.Tensor,
+                   model_points_3d: torch.Tensor,
+                   K: torch.Tensor,
+                   R_base: torch.Tensor,
+                   T_base: torch.Tensor) -> torch.Tensor:
+    """ Minimize one translation to match B constraints.
+
+    Args:
+        boxes_2d: (B, 4)
+        model_points_3d: (B, V, 3)
+        K: (B, 3, 3) global camera
+        R_base: (B, 3, 3)
+        T_base: (B, 1, 3)
+
+    Returns:
+        translation: (3,)
+    """
+    bsize = boxes_2d.size(0)
+    check_shape(boxes_2d, (bsize, 4))
+    check_shape(model_points_3d, (bsize, -1, 3))
+    check_shape(K, (bsize, 3, 3))
+    check_shape(R_base, (bsize, 3, 3))
+    check_shape(T_base, (bsize, 1, 3))
+
+    boxes_2d = xywh_to_xyxy(boxes_2d)
+    diag_bb = (boxes_2d[:, [2, 3]] - boxes_2d[:, [0, 1]]).norm(p=2, dim=-1)  # Get length of reference bbox diagonal
+    bb_xy_centers = (boxes_2d[:, [0, 1]] + boxes_2d[:, [2, 3]]) / 2  # Get center of reference bbox
+    fxfy = K[:, [0, 1], [0, 1]]  # (B, 2)
+    cxcy = K[:, [0, 1], [2, 2]]
+
+    z = fxfy.new_ones(bsize, 1)
+    xy_init = ((bb_xy_centers - cxcy) * z) / fxfy
+    trans = torch.cat([xy_init, z], 1)
+
+    for _ in range(10):
+        C_pts_3d = model_points_3d + trans.unsqueeze(1)
+        C_pts_3d = C_pts_3d / C_pts_3d[:, :, 2:]
+        proj_pts = K.bmm(C_pts_3d.transpose(1, 2)).transpose(1, 2)
+        proj_pts = proj_pts[..., :2]
+        # proj_pts = project.batch_proj2d(C_pts_3d, K)
+        diag_proj = (proj_pts.min(1)[0] - proj_pts.max(1)[0]).norm(2, -1)
+        proj_xy_centers = (proj_pts.min(1)[0] + proj_pts.max(1)[0]) / 2
+
+        # Update z to increase/decrease size of projected bbox
+        delta_z = z * (diag_proj / diag_bb - 1).unsqueeze(-1)
+        z = z + delta_z
+        # Update xy to shift center of projected bbox
+        xy_init += ((bb_xy_centers - proj_xy_centers) * z) / fxfy
+        trans = torch.cat([xy_init, z], 1)
+    return trans

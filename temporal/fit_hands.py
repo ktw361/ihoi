@@ -17,7 +17,11 @@ from temporal.optim_plan import optimize_hand, smooth_hand_pose
 from libzhifan import odlib
 odlib.setup(order='xywh')
 
-""" Run ihoi but with differentiable based pose optimizer. """
+""" Run ihoi but with differentiable based pose optimizer. 
+
+Note: don't delete this script as it can be used to Sanity-check FrankMocap
+
+"""
 
 
 def get_args():
