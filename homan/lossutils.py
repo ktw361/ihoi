@@ -3,6 +3,7 @@ import numpy as np
 import torch
 
 from pytorch3d.loss import chamfer_distance
+from pytorch3d.ops import knn_points
 from homan.interactions import contactloss, scenesdf
 
 
@@ -76,6 +77,21 @@ def compute_chamfer_distance(verts_a, verts_b, batch_reduction='sum') -> torch.T
     return dist
 
 
+def compute_nearest_dist(p_from: torch.Tensor, p_to: torch.Tensor) -> torch.Tensor:
+    """ Compute min distance from `p_from` to `p_to`
+
+    Args:
+        v_from : (B, Va, 3)
+        v_to : (B, Vb, 3)
+
+    Returns:
+        dist: (B,)
+    """
+    dists = knn_points(p_from, p_to, K=1).dists
+    min_d = torch.min(dists, dim=1).values
+    return min_d
+
+
 def compute_ordinal_depth_loss(masks:torch.Tensor, 
                                silhouettes: List[torch.Tensor], 
                                depths: List[torch.Tensor],
@@ -116,7 +132,7 @@ def compute_ordinal_depth_loss(masks:torch.Tensor,
     return {"depth": loss}
 
 
-def iou_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+def iou_loss(pred: torch.Tensor, gt: torch.Tensor, clamp_max=100.0) -> torch.Tensor:
     """
     Args:
         pred: (..., H, W) values in [0, 1]
@@ -130,6 +146,7 @@ def iou_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
     iou = inter.sum(dim=(-2, -1)) / ((union - inter).sum(dim=(-2, -1)) + 1e-7)
     # loss = 1.0 - iou
     loss = - iou.log_()
+    loss = loss.clamp_max_(clamp_max)
     return loss
 
 
