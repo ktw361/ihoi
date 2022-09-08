@@ -681,6 +681,8 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         out = np.empty(shape=(num_rows*h, num_cols*w, 3), dtype=imgs[0].dtype)
         for row in range(num_rows):
             for col in range(num_cols):
+                if row*num_cols+col >= l:
+                    break
                 out[row*h:(row+1)*h, col*w:(col+1)*w, ...] = imgs[row*num_cols+col]
 
         return out

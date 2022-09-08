@@ -145,7 +145,12 @@ class EpicClipDataset(Dataset):
             img_h=1080, img_w=1920)
         new_w, new_h = self.image_size
         global_cam = global_cam.resize(new_h=new_h, new_w=new_w)
-        batch_global_cam = global_cam.repeat(self.sample_frames, device='cpu')
+        if self.sample_frames < 0:
+            info = self.data_infos[index]
+            bsize = info.end - info.start + 1
+        else:
+            bsize = self.sample_frames
+        batch_global_cam = global_cam.repeat(bsize, device='cpu')
         return batch_global_cam
 
     def __getitem__(self, index):
@@ -164,7 +169,7 @@ class EpicClipDataset(Dataset):
         info = self.data_infos[index]
         vid, cat, side, start, end = \
             info.vid, info.cat, info.side, info.start, info.end
-        if end - start > 100:
+        if self.sample_frames < 0 and end - start > 100:
             raise NotImplementedError(f"frames more than 100 : {end - start}.")
         images = []
         hand_bbox_dicts = []
