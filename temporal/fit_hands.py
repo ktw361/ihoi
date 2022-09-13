@@ -62,7 +62,7 @@ def main(args):
             continue
 
 
-def fit_scene(dataset, 
+def fit_scene(dataset: EpicClipDataset, 
               hand_predictor,
               index: int, 
               out_dir: str,
@@ -92,8 +92,7 @@ def fit_scene(dataset,
     one_hands = collate_mocap_hand(mocap_predictions, side)
 
     if show_bbox:
-        fig = visualize_bboxes(
-            images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks)
+        fig = dataset.visualize_bboxes(index)
         save_name = f"{info.vid}_{info.gt_frame}_bbox.png"
         save_name = osp.join(out_dir, save_name)
         fig.savefig(save_name)
@@ -128,37 +127,6 @@ def visualize_loss(loss_records: dict):
 
     plt.legend(loss_records.keys())
     plt.show()
-    return fig
-
-
-def visualize_bboxes(images,
-                     hand_bbox_dicts,
-                     side,
-                     obj_bboxes,
-                     hand_masks,
-                     obj_masks):
-    l = len(images)
-    num_cols = 5
-    num_rows = (l + num_cols - 1) // num_cols
-    fig, axes = plt.subplots(
-        nrows=num_rows, ncols=num_cols,
-        sharex=True, sharey=True, figsize=(20, 20))
-    for idx, ax in enumerate(axes.flat, start=0):
-        img = images[idx]
-        masked_img = img.copy()
-        masked_img[hand_masks[idx] == 1, ...] = (0, 255, 0)
-        masked_img[obj_masks[idx] == 1, ...] = (255, 0, 255)
-        img = cv2.addWeighted(img, 0.8, masked_img, 0.2, 1.0)
-        img = odlib.draw_bboxes_image_array(
-            img, hand_bbox_dicts[idx][side][None], color='red')
-        odlib.draw_bboxes_image(img, obj_bboxes[idx][None], color='blue')
-        img = np.asarray(img)
-        ax.imshow(img)
-        ax.set_axis_off()
-        if idx == l-1:
-            break
-
-    plt.tight_layout()
     return fig
 
 

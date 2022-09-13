@@ -18,10 +18,7 @@ def compute_pca_loss(mano_pca_comps):
 
 def compute_collision_loss(verts_hand,
                            verts_object,
-                           faces_hand,
-                           faces_object,
-                           max_collisions=5000,
-                           debug=True):
+                           faces_object):
     hand_nb = verts_hand.shape[0] // verts_object.shape[0]
     mano_faces = faces_object[0].new(MANO_CLOSED_FACES)
     if hand_nb > 1:
@@ -45,6 +42,13 @@ def compute_intrinsic_scale_prior(intrinsic_scales, intrinsic_mean):
 
 def compute_contact_loss(verts_hand_b, verts_object_b, faces_object,
                          faces_hand):
+    """
+    Args:
+        verts_hand_b: (B, V1, 3)
+        verts_object_b: (B, V2, 3)
+        faces_hand: (B, F1, 3)
+        faces_object: (B, F2, 3)
+    """
     hand_nb = verts_hand_b.shape[0] // verts_object_b.shape[0]
     faces_hand_closed = faces_hand.new(MANO_CLOSED_FACES).unsqueeze(0)
     if hand_nb > 1:
@@ -132,7 +136,10 @@ def compute_ordinal_depth_loss(masks:torch.Tensor,
     return {"depth": loss}
 
 
-def iou_loss(pred: torch.Tensor, gt: torch.Tensor, clamp_max=100.0) -> torch.Tensor:
+def iou_loss(pred: torch.Tensor, 
+             gt: torch.Tensor, 
+             post='rev',
+             clamp_max=100.0) -> torch.Tensor:
     """
     Args:
         pred: (..., H, W) values in [0, 1]
@@ -144,9 +151,11 @@ def iou_loss(pred: torch.Tensor, gt: torch.Tensor, clamp_max=100.0) -> torch.Ten
     union = pred + gt
     inter = pred * gt
     iou = inter.sum(dim=(-2, -1)) / ((union - inter).sum(dim=(-2, -1)) + 1e-7)
-    # loss = 1.0 - iou
-    loss = - iou.log_()
-    loss = loss.clamp_max_(clamp_max)
+    if post == 'log':
+        loss = - iou.log_()
+        loss = loss.clamp_max_(clamp_max)
+    elif post == 'rev':
+        loss = 1.0 - iou
     return loss
 
 

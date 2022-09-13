@@ -416,8 +416,7 @@ class HOForwarder(nn.Module):
             loss_contact = lossutils.compute_contact_loss(
                 verts_hand_b=verts_hand_det_scale,
                 verts_object_b=verts_object,
-                faces_object=self.faces_object,
-                faces_hand=self.faces_hand)
+                faces_object=self.faces_object)
             loss_dict.update(loss_contact)
         if loss_weights is None or loss_weights["sil_obj"] > 0:
             sil_loss_dict, sil_metric_dict = self.losses.compute_sil_loss_object(

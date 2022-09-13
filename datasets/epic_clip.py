@@ -15,6 +15,13 @@ from datasets.epic_lib.epic_utils import (
 from libzhifan.odlib import xyxy_to_xywh, xywh_to_xyxy
 from libzhifan.geometry import CameraManager, BatchCameraManager
 
+# Visualization
+import matplotlib.pyplot as plt
+from libzhifan import odlib
+odlib.setup('xywh')
+import cv2
+
+
 epic_cats = [
     '_bg',
     'left hand',
@@ -42,6 +49,16 @@ class ClipInfo(NamedTuple):
     start: int
     end: int
     comments: str
+
+
+class DataElement(NamedTuple):
+    images: list 
+    hand_bbox_dicts: list 
+    side_return: str 
+    obj_bboxes: torch.Tensor
+    hand_masks: torch.Tensor 
+    object_masks: torch.Tensor 
+    cat: str
 
 
 class EpicClipDataset(Dataset):
@@ -138,6 +155,33 @@ class EpicClipDataset(Dataset):
     def _get_obj_box(self, vid, frame_idx, cat):
         return self.ho_boxes[vid][frame_idx][cat]
 
+    def visualize_bboxes(self, index):
+        images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, _ \
+            = self.__getitem__(index)
+        l = len(images)
+        num_cols = 5
+        num_rows = (l + num_cols - 1) // num_cols
+        fig, axes = plt.subplots(
+            nrows=num_rows, ncols=num_cols,
+            sharex=True, sharey=True, figsize=(20, 20))
+        for idx, ax in enumerate(axes.flat, start=0):
+            img = images[idx]
+            masked_img = img.copy()
+            masked_img[hand_masks[idx] == 1, ...] = (0, 255, 0)
+            masked_img[obj_masks[idx] == 1, ...] = (255, 0, 255)
+            img = cv2.addWeighted(img, 0.8, masked_img, 0.2, 1.0)
+            img = odlib.draw_bboxes_image_array(
+                img, hand_bbox_dicts[idx][side][None], color='red')
+            odlib.draw_bboxes_image(img, obj_bboxes[idx][None], color='blue')
+            img = np.asarray(img)
+            ax.imshow(img)
+            ax.set_axis_off()
+            if idx == l-1:
+                break
+
+        plt.tight_layout()
+        return fig
+
     def get_camera(self, index=-1) -> BatchCameraManager:
         global_cam = CameraManager(
             # fx=1050, fy=1050, cx=960, cy=540,
@@ -217,7 +261,16 @@ class EpicClipDataset(Dataset):
         hand_masks = torch.as_tensor(hand_masks)
         object_masks = torch.as_tensor(object_masks)
 
-        return images, hand_bbox_dicts, side_return, obj_bbox_arrs, hand_masks, object_masks, cat
+        element = DataElement(
+            images=images,
+            hand_bbox_dicts=hand_bbox_dicts,
+            side_return=side_return,
+            obj_bboxes=obj_bbox_arrs,
+            hand_masks=hand_masks,
+            object_masks=object_masks,
+            cat=cat
+        )
+        return element
 
 
 if __name__ == '__main__':
