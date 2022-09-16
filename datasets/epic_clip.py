@@ -102,8 +102,9 @@ class EpicClipDataset(Dataset):
             hand_expansion (float): size of hand bounding box after squared.
             crop_hand_mask: If True, will crop hand mask with only pixels
                 inside hand_bbox.
-            sample_frames:
-                whether to subsample frames to a reduced number
+            sample_frames (int):
+                If clip has frames more than sample_frames,
+                subsample them to a reduced number.
         """
         super().__init__(*args, **kwargs)
         self.epic_rgb_root = osp.join(epic_root, 'rgb_root')
@@ -189,11 +190,10 @@ class EpicClipDataset(Dataset):
             img_h=1080, img_w=1920)
         new_w, new_h = self.image_size
         global_cam = global_cam.resize(new_h=new_h, new_w=new_w)
-        if self.sample_frames < 0:
-            info = self.data_infos[index]
-            bsize = info.end - info.start + 1
-        else:
-            bsize = self.sample_frames
+        info = self.data_infos[index]
+        bsize = info.end - info.start + 1
+        if self.sample_frames > 0:
+            bsize = min(self.sample_frames, bsize)
         batch_global_cam = global_cam.repeat(bsize, device='cpu')
         return batch_global_cam
 
@@ -220,9 +220,11 @@ class EpicClipDataset(Dataset):
         obj_bbox_arrs = []
         object_masks = []
         hand_masks = []
-        frames = range(start, end+1) \
-            if self.sample_frames <= 0 \
-                else np.linspace(start, end, num=self.sample_frames, dtype=int)
+        if self.sample_frames < 0 or (end-start+1 < self.sample_frames):
+            frames = range(start, end+1)
+        else:
+            frames = np.linspace(start, end, num=self.sample_frames, dtype=int)
+
         for frame_idx in frames:
             image = read_epic_image(
                 vid, frame_idx, as_pil=True)
