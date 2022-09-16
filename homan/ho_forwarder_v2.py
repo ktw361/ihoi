@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, List
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -442,8 +442,14 @@ class HOForwarderV2Impl(HOForwarderV2):
         
         return loss_dict
 
-    def forward_obj_pose_render(self, loss_only=True, func='iou') -> dict:
+    def forward_obj_pose_render(self, 
+                                loss_only=True, 
+                                func='l2_iou',
+                                sample_indices=None) -> dict:
         """ Reimplement the PoseRenderer.foward() 
+
+        Args:
+            v_obj (torch.Tensor): (B, N, V, 3)
         
         Returns:
             loss_dict: dict with
@@ -451,9 +457,15 @@ class HOForwarderV2Impl(HOForwarderV2):
                 - offscreen: (B, N)
         """
         b, n, w = self.bsize, self.num_obj_init, self.mask_size
-        verts = self.get_verts_object()
-        image = self.keep_mask_object[:, None] * self.render_obj(verts)  # (B, N, W, W)
-        image_ref = self.ref_mask_object[:, None]  # (B, 1, W, W)
+        if sample_indices is None:
+            sample_indices = np.arange(self.bsize)
+
+        v_obj = self.get_verts_object()[sample_indices, ...]
+        image = self.render_obj(v_obj)  # (B, N, W, W)
+        keep = self.keep_mask_object[sample_indices, None]
+        image = keep * image
+        image_ref = self.ref_mask_object[sample_indices, None]  # (B, 1, W, W)
+        
         loss_dict = {}
         if func == 'l2':
             loss_mask = torch.sum((image - image_ref)**2, dim=(-2,-1))
@@ -468,20 +480,21 @@ class HOForwarderV2Impl(HOForwarderV2):
                 iou_factor = iou_loss(image, image_ref, post='rev')
             loss_mask = loss_mask * iou_factor
 
-        loss_dict["mask"] = loss_mask # / self.bsize
+        loss_dict["mask"] = loss_mask
         if not loss_only:
             with torch.no_grad():
                 iou = batch_mask_iou(
                     image.view(b*n, w, w).detach(),
                     image_ref.repeat(1, n, 1, 1).view(b*n, w, w).detach())  # (B*N,)
                 iou = iou.view(b, n)  # (B, N)
-        loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(verts)
+        loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(
+            v_obj, sample_indices=sample_indices)
         if not loss_only:
             return loss_dict, iou, image
         else:
             return loss_dict
 
-    def compute_offscreen_loss(self, verts, cam_idx=None):
+    def compute_offscreen_loss(self, verts, sample_indices=None):
         """
         Computes loss for offscreen penalty. This is used to prevent the degenerate
         solution of moving the object offscreen to minimize the chamfer loss.
@@ -495,8 +508,9 @@ class HOForwarderV2Impl(HOForwarderV2):
         # On-screen means coord_xy between [-1, 1] and far > depth > 0
         b, n = verts.size(0), verts.size(1)
         batch_K = self.camintr.unsqueeze(1).repeat(1, n, 1, 1)  # (B, N, 3, 3)
-        if cam_idx is not None:
-            batch_K = batch_K[[cam_idx], ...]
+        if sample_indices is None:
+            sample_indices = np.arange(self.bsize)
+        batch_K = batch_K[sample_indices, ...]
         proj = nr.projection(
             verts.view(b*n, -1, 3),
             batch_K.view(b*n, 3, 3),
@@ -518,18 +532,20 @@ class HOForwarderV2Impl(HOForwarderV2):
     
     """ Hand-Object interaction """
 
-    def loss_ordinal_depth(self):
-        verts_hand = self.get_verts_hand()
-        verts_object = self.get_verts_object()
+    def loss_ordinal_depth(self, v_hand=None, v_obj=None):
+        if v_hand is None:
+            v_hand = self.get_verts_hand()
+        if v_obj is None:
+            v_obj = self.get_verts_object()
     
         _, depths_o, silhouettes_o = self.renderer.render(
-            verts_object[:, 0], 
+            v_obj[:, 0], 
             self.faces_object.repeat(self.bsize, 1, 1), 
             self.textures_object.repeat(self.bsize, 1, 1, 1, 1, 1))  # (B, 256, 256)
         silhouettes_o = (silhouettes_o == 1).bool()
 
         _, depths_p, silhouettes_p = self.renderer.render(
-            verts_hand, self.faces_hand, self.textures_hand)
+            v_hand, self.faces_hand, self.textures_hand)
         silhouettes_p = (silhouettes_p == 1).bool()
 
         all_masks = torch.stack(
@@ -541,8 +557,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             all_masks, silhouettes, depths)
         return loss_dict['depth']
 
-    def loss_center(self, obj_idx=0,
-                    verts_hand=None, verts_obj=None) -> torch.Tensor:
+    def loss_center(self, obj_idx=0, v_hand=None, v_obj=None) -> torch.Tensor:
         """
         Args:
             obj_idx: int
@@ -552,41 +567,46 @@ class HOForwarderV2Impl(HOForwarderV2):
         Return:
             distance between obj and hand center
         """
-        if verts_hand is None:
-            verts_hand = self.get_verts_hand()
-        if verts_obj is None:
-            verts_obj = self.get_verts_object()[:, obj_idx]
-        center_loss = F.mse_loss(verts_hand.mean(1), verts_obj.mean(1))
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        center_loss = F.mse_loss(v_hand.mean(1), v_obj[:, obj_idx].mean(1))
         return center_loss
     
-    def loss_chamfer(self, obj_idx=0, batch_reduction='sum') -> torch.Tensor:
+    def loss_chamfer(self, 
+                     obj_idx=0, 
+                     batch_reduction='sum', 
+                     v_hand=None,
+                     v_obj=None) -> torch.Tensor:
         """ returns a scalar """
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_chamfer = compute_chamfer_distance(
-            self.get_verts_hand(), self.get_verts_object()[:, obj_idx, ...],
+            v_hand, v_obj[:, obj_idx],
             batch_reduction=batch_reduction)
         return l_chamfer
     
-    def loss_nearest_dist(self, obj_idx=0) -> torch.Tensor:
+    def loss_nearest_dist(self, obj_idx=0, v_hand=None, v_obj=None) -> torch.Tensor:
         """ returns (B,) """
-        l_min_d = compute_nearest_dist(
-            self.get_verts_object()[:, obj_idx, ...], self.get_verts_hand())
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        l_min_d = compute_nearest_dist(v_obj[:, obj_idx, ...], v_hand)
         return l_min_d
     
-    def loss_contact(self):
-        v_hand = self.get_verts_hand()
-        v_obj = self.get_verts_object()[:, 0]
+    def loss_contact(self, obj_idx=0, v_hand=None, v_obj=None):
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_contact = lossutils.compute_contact_loss(
             verts_hand_b=v_hand,
-            verts_object_b=v_obj,
+            verts_object_b=v_obj[:, obj_idx],
             faces_object=self.faces_object.repeat(self.bsize, 1, 1),
             faces_hand=self.faces_hand)
         return l_contact['contact']
 
-    def loss_collision(self):
-        v_hand = self.get_verts_hand()
-        v_obj = self.get_verts_object()[:, 0]
+    def loss_collision(self, obj_idx=0, v_hand=None, v_obj=None):
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object()[:, 0] if v_obj is None else v_obj
         l_collision = lossutils.compute_collision_loss(
-            v_hand, v_obj, self.faces_object.repeat(self.bsize, 1, 1))
+            v_hand, v_obj[:, obj_idx], self.faces_object.repeat(self.bsize, 1, 1))
         return l_collision['collision']
 
 

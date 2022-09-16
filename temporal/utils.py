@@ -52,7 +52,7 @@ def init_6d_pose_from_bboxes(bboxes: torch.Tensor,
         base_rotation.unsqueeze(1))  # (B, N_init, V, 3)
 
     if zero_init_transl:
-        translations_init = torch.zeros_like(translations_init)
+        translations_init = rotations.new_zeros([num_init, 1, 3])
     else:
         translations_init = []
         for i in range(bsize):
@@ -111,3 +111,38 @@ def median_vector_index(vecs: torch.Tensor):
     dist = torch.sum((vecs - mean_vec)**2, dim=1)
     ind = torch.argmin(dist)
     return ind
+
+
+def softmax_temp(weights: torch.Tensor, temperature) -> torch.Tensor:
+    """ softmax with temperature 
+
+    Args:
+        weigths: (N,)
+        temperature: float
+    
+    Returns:
+        probs: (N,)
+    """
+    probs = torch.nn.functional.softmax(weights / temperature)
+    return probs
+
+
+def choose_with_softmax(weights: torch.Tensor, 
+                        temperature: float, 
+                        ratio: float) -> list:
+    """ softmax with temperature 
+
+    Args:
+        weigths: (N,)
+        temperature (float):
+        ratio (float): in (0, 1]
+    
+    Returns:
+        list of index
+    """
+    num_samples = int(len(weights) * ratio)
+    with torch.no_grad():
+        probs = softmax_temp(weights, temperature)
+        indices = torch.multinomial(
+            probs, num_samples=num_samples, replacement=False)
+    return indices.tolist()

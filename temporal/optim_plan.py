@@ -1,8 +1,9 @@
-from typing import Union
+from typing import NamedTuple, Union
 import tqdm
 import numpy as np
 import torch
 from homan.ho_forwarder_v2 import HOForwarderV2Vis, HOForwarderV2Impl
+from temporal.utils import choose_with_softmax
 
 
 """ Different HO optimization plans. """
@@ -37,7 +38,7 @@ def smooth_hand_pose(homan: HOForwarderV2Impl,
 def optimize_hand(homan: HOForwarderV2Impl,
                   lr=1e-2,
                   num_steps=100,
-                  verbose=True):
+                  verbose=True) -> HOForwarderV2Impl:
     optimizer = torch.optim.Adam([
         {
             'params': [
@@ -75,11 +76,76 @@ def optimize_hand(homan: HOForwarderV2Impl,
     return homan
 
 
+class ObjectParams(NamedTuple):
+    translations_object: torch.Tensor
+    rotations_object: torch.Tensor
+    scale_object: torch.Tensor
+
+
+def exhaust_optim_obj_pose(homan: HOForwarderV2Impl,
+                           frame_idx: int,
+                           lr=1e-3,
+                           max_iters=5000,
+                           stop_thresh=1e-6):
+    """
+    Args:
+        stop_thresh: Stop if difference between two loss less than this number.
+
+    """
+    optimizer = torch.optim.Adam([
+        {
+            'params': [
+                homan.rotations_object,
+                homan.translations_object,
+                homan.scale_object,
+            ],
+            'lr': lr
+        }
+    ])
+
+    best_loss_single = torch.tensor(np.inf)
+
+    loss_prev = torch.tensor(np.inf)
+    with tqdm.tqdm(total=max_iters) as loop:
+        for _ in range(max_iters):
+            optimizer.zero_grad()
+            l_obj_dict = homan.simple_obj_sil(frame_idx=frame_idx)
+            l_obj_mask = l_obj_dict['mask']  # (B,)
+            l_contact = homan.loss_chamfer(batch_reduction='sum')  # homan.loss_contact()
+            l_depth = homan.loss_ordinal_depth()
+
+            loss = l_obj_mask.sum() + l_contact.sum() + l_depth.sum()
+            diff = torch.abs(loss_prev - loss)
+            if diff < stop_thresh:
+                break
+            loss_prev = loss
+            loss.backward()
+            optimizer.step()
+            if loss.min() < best_loss_single:
+                best_rots_single = homan.rotations_object.detach().clone()
+                best_trans_single = homan.translations_object.detach().clone()
+                best_scale_single = homan.scale_object.detach().clone()
+                best_loss_single = loss.min()
+            loop.set_description(f"obj loss: {best_loss_single.item():.3g}, diff: {diff:.4ikjkg}")
+            loop.update()
+
+    params = ObjectParams(best_trans_single, best_rots_single, best_scale_single)
+    return params
+
+
 def find_optimal_obj_pose(homan: HOForwarderV2Impl,
-                          cam_idx: int,
+                          frame_idx: int,
                           num_iterations=50,
                           lr=1e-3,
+                          max_iters=5000,
+                          stop_thresh=1e-3,
                           sort_best=True):
+    """
+    Args:
+        stop_thresh: Stop if difference between two loss less than this number.
+
+    """
+    raise ValueError("Obsolete")
     optimizer = torch.optim.Adam([
         {
             'params': [
@@ -95,16 +161,15 @@ def find_optimal_obj_pose(homan: HOForwarderV2Impl,
     best_rots = None
     best_trans = None
     best_loss_single = torch.tensor(np.inf)
-    best_trans_single = None
 
     with tqdm.tqdm(total=num_iterations) as loop:
         for _ in range(num_iterations):
             optimizer.zero_grad()
-            l_obj_dict = homan.forward_obj_sil_frame(cam_idx=cam_idx)
+            l_obj_dict = homan.simple_obj_sil(frame_idx=frame_idx)
             l_obj_mask = l_obj_dict['mask']  # (B,)
 
             losses = l_obj_mask
-            loss = losses[cam_idx].sum()
+            loss = losses[frame_idx].sum()
             loss.backward()
             optimizer.step()
             if losses.min() < best_loss_single:
@@ -140,15 +205,17 @@ def optimize_hand_allmask(homan: HOForwarderV2Vis,
                           lr=1e-2,
                           num_steps=100,
                           vis_interval=-1,
+                          vis=False,
                           writer=None):
-    info = homan.info
-    prefix = f'{info.vid}_{info.gt_frame}'
+    if hasattr(homan, 'info'):
+        info = homan.info
+        prefix = f'{info.vid}_{info.gt_frame}'
 
     optimizer = torch.optim.Adam([
         {
             'params': [
-                homan.rotations_hand,
-                homan.translations_hand, # (B)
+                # homan.rotations_hand,
+                # homan.translations_hand, # (B)
                 homan.rotations_object,  # (1,)
                 homan.translations_object,
                 homan.scale_object,
@@ -160,55 +227,130 @@ def optimize_hand_allmask(homan: HOForwarderV2Vis,
     with tqdm.tqdm(total=num_steps) as loop:
         for step in range(num_steps):
             optimizer.zero_grad()
-            # l_min_d = homan.loss_nearest_dist().sum()
             l_pca = homan.loss_pca_interpolation().sum()
             l_hand_pose = homan.loss_hand_rot().sum() + homan.loss_hand_transl().sum()
-            l_sil_hand = homan.loss_sil_hand(compute_iou=False, func='iou')  # (B,)
-            l_obj_dict = homan.forward_obj_pose_render(loss_only=True, func='iou')  # (B,N)
+            l_sil_hand = homan.loss_sil_hand(compute_iou=False, func='l2_iou')  # (B,)
+
+            l_obj_dict = homan.forward_obj_pose_render(loss_only=True, func='l2_iou')  # (B,N)
             l_obj_mask = l_obj_dict['mask']
             l_obj_offscreen = l_obj_dict['offscreen']
+            # l_obj_center = homan.diff_proj_center()
 
-            tot_loss = l_sil_hand.sum() + \
-                (l_obj_mask.sum() + l_obj_offscreen.sum()) + \
-                l_pca + l_hand_pose
-                # l_min_d
-            
-            # print(
-            #     # f"min_d:{l_min_d.item():.3f}"
-            #     f"pca:{l_pca.item():.3f} "
-            #     f"sil_hand:{l_sil_hand.sum().item():.3f} "
-            #     f"obj_mask:{l_obj_mask.sum().item():.3f} "
-            #     f"hand_pose:{l_hand_pose.item():.3f}")
+            l_contact = homan.loss_chamfer(batch_reduction='sum')  # homan.loss_contact()
+            # l_contact = homan.loss_nearest_dist().sum()
+            # l_collision = homan.loss_collision()
+            l_depth = homan.loss_ordinal_depth()
+
+            tot_loss = 0.1 * l_sil_hand.sum() + \
+                0.1 * (l_obj_mask.sum() + l_obj_offscreen.sum()) +\
+                l_pca + l_hand_pose +\
+                l_depth + 10*l_contact #+ l_collision
 
             if vis_interval > 0 and step % vis_interval == 0:
+                print(
+                    # f"min_d:{l_min_d.item():.3f}"
+                    f"pca:{l_pca.item():.3f} "
+                    f"sil_hand:{l_sil_hand.sum().item():.3f} "
+                    f"obj_mask:{l_obj_mask.sum().item():.3f} "
+                    # f"obj_center:{l_obj_center.sum().item():.3f} "
+                    f"contact:{l_contact.sum().item():.3f} "
+                    f"hand_pose:{l_hand_pose.item():.3f}")
                 if writer is None:
-                    _ = homan.render_grid(obj_idx=0, low_reso=True)
+                    if vis:
+                        _ = homan.render_grid(obj_idx=0, low_reso=True)
                 else:
                     img = homan.render_grid_np(obj_idx=0)
                     writer.add_image(tag=f'{prefix}', 
                                      img_tensor=img.transpose(2, 0, 1),
                                      global_step=step)
 
-                    scalar_dict = dict()
-                    scalar_dict['tot_loss'] = tot_loss.item()
-                    for b in range(homan.bsize):
-                        scalar_dict.update({
-                            f'hand_{b}': l_sil_hand[b].item(),
-                            f'obj_{b}': l_obj_mask[b].item() + l_obj_offscreen[b].item()
-                        })
-                    writer.add_scalars(
-                        main_tag=f'{prefix}', global_step=step,
-                        tag_scalar_dict=scalar_dict)
-
             tot_loss.backward()
             optimizer.step()
             loop.set_description(f"tot_loss: {tot_loss.item():.3g}")
             loop.update()
 
-    if writer is not None:
-        writer.add_figure(tag=f'{prefix}_final', 
-                        figure=homan.render_grid(),
-                        global_step=step)
-        writer.flush()
-    
     return homan
+
+
+def sampled_obj_optimize(homan: HOForwarderV2Vis,
+                         lr=1e-2,
+                         num_epochs=50,
+                         num_iters=2000,
+                         temperature=100.,
+                         ratio=0.5,
+                         vis_interval=-1,
+                         vis=False,
+                         writer=None):
+                         
+    if hasattr(homan, 'info'):
+        info = homan.info
+        prefix = f'{info.vid}_{info.gt_frame}'
+
+    optimizer = torch.optim.Adam([
+        {
+            'params': [
+                # homan.rotations_hand,
+                # homan.translations_hand, # (B)
+                homan.rotations_object,  # (1,)
+                homan.translations_object,
+                homan.scale_object,
+            ],
+            'lr': lr
+        }
+    ])
+
+    weights = homan.rotations_hand.new_zeros([homan.bsize])
+
+    for e in range(num_epochs):
+
+        sample_indices = choose_with_softmax(
+            weights, temperature=temperature, ratio=ratio)
+        print(f"Sample {sample_indices} at epoch {e}, weights = {weights.tolist()}")
+
+        with tqdm.tqdm(total=num_iters) as loop:
+            for step in range(num_iters):
+                optimizer.zero_grad()
+
+                v_hand = homan.get_verts_hand()[sample_indices, ...]
+                v_obj = homan.get_verts_object()[sample_indices, ...]
+
+                l_obj_dict = homan.forward_obj_pose_render(sample_indices=sample_indices)  # (B,N)
+                l_obj_mask = l_obj_dict['mask']
+                l_obj_offscreen = l_obj_dict['offscreen']
+                l_contact = homan.loss_chamfer(
+                    v_hand=v_hand, v_obj=v_obj,
+                    batch_reduction='sum')  # homan.loss_contact()
+                l_depth = homan.loss_ordinal_depth()
+
+                # Accumulate
+                l_obj_mask = 0.1 * l_obj_mask.sum()
+                l_obj_offscreen = 0.1 * l_obj_offscreen.sum()
+                l_depth = l_depth
+                l_contact = 10 * l_contact
+                tot_loss = l_obj_mask + l_obj_offscreen + l_depth + l_contact
+
+                if vis_interval > 0 and step % vis_interval == 0:
+                    print(
+                        f"obj_mask:{l_obj_mask.item():.3f} "
+                        f"obj_offscrn:{l_obj_offscreen.item():.3f} "
+                        f"depth:{l_depth.item():.3f} "
+                        f"contact:{l_contact.item():.3f} "
+                        )
+                    if writer is None:
+                        if vis:
+                            _ = homan.render_grid(obj_idx=0, low_reso=True)
+                    else:
+                        img = homan.render_grid_np(obj_idx=0)
+                        writer.add_image(tag=f'{prefix}', 
+                                        img_tensor=img.transpose(2, 0, 1),
+                                        global_step=step)
+
+                tot_loss.backward()
+                optimizer.step()
+                loop.set_description(f"tot_loss: {tot_loss.item():.3g}")
+                loop.update()
+    
+        # Update weights
+        weights[sample_indices] -= tot_loss
+
+    return homan, weights
