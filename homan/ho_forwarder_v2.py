@@ -47,7 +47,6 @@ class HOForwarderV2(nn.Module):
         self.renderer.light_intensity_direction = 0.3
         self.renderer.light_intensity_ambient = 0.5
         self.renderer.background_color = [1.0, 1.0, 1.0]
-        # TODO: ordinal loss renderer image_size
 
     """ Common functions """
 
@@ -172,6 +171,30 @@ class HOForwarderV2(nn.Module):
 
     """ Object functions """
 
+    def set_obj_transform(self,
+                          translations_object,
+                          rotations_object,
+                          scale_object):
+        """ Initialize / Re-set object parameters
+
+        Args:
+            obj_trans: (N, 3, 3)
+        """
+        if rotations_object.shape[-1] == 3:
+                rotations_object6d = matrix_to_rot6d(rotations_object)
+        else:
+            rotations_object6d = rotations_object
+        self.rotations_object = nn.Parameter(
+            rotations_object6d.detach().clone(), requires_grad=True)
+        self.translations_object = nn.Parameter(
+            translations_object.detach().clone(),
+            requires_grad=True)
+        """ Translation is also a function of scale T(s) = s * T_init """
+        self.scale_object = nn.Parameter(
+            torch.as_tensor([scale_object], 
+                            device=self.rotations_object.device),
+            requires_grad=True)
+
     def set_obj_params(self,
                        translations_object,
                        rotations_object,
@@ -184,20 +207,7 @@ class HOForwarderV2(nn.Module):
             obj_trans: (N, 3, 3)
         """
         self.num_obj_init = len(rotations_object)
-        if rotations_object.shape[-1] == 3:
-            rotations_object6d = matrix_to_rot6d(rotations_object)
-        else:
-            rotations_object6d = rotations_object
-        self.rotations_object = nn.Parameter(
-            rotations_object6d.detach().clone(), requires_grad=True)
-        self.translations_object = nn.Parameter(
-            translations_object.detach().clone(),
-            requires_grad=True)
-        """ Translation is also a function of scale T(s) = s * T_init """
-        self.scale_object = nn.Parameter(
-            torch.as_tensor([scale_object]),
-            requires_grad=True,
-        )
+        self.set_obj_transform(translations_object, rotations_object, scale_object)
         self.register_buffer("verts_object_og", verts_object_og)
         """ Do not attempt to copy tensor too early, which will get OOM. """
         self.register_buffer(
@@ -393,30 +403,31 @@ class HOForwarderV2Impl(HOForwarderV2):
         images = images.view(b, n, self.mask_size, self.mask_size)
         return images
 
-    def forward_obj_sil_frame(self, 
-                              cam_idx, 
-                              ret_iou=False, 
-                              func='iou') -> dict:
+    def simple_obj_sil(self, 
+                       frame_idx, 
+                       ret_iou=False, 
+                       func='l2') -> dict:
         """  For find_optimal_obj_pose()
         returns: (N,) 
         """
-        raise NotImplementedError
         _, n, w = self.bsize, self.num_obj_init, self.mask_size
-        verts = self.get_verts_object(cam_idx)
-        image = self.keep_mask_object[[cam_idx], None] * self.render_obj(verts, cam_idx=cam_idx)  # (1, N, W, W)
-        image_ref = self.ref_mask_object[[cam_idx], None]  # (1, 1, W, W)
+        verts = self.get_verts_object(frame_idx)
+        image = self.render_obj(verts, cam_idx=frame_idx)  # (1, N, W, W)
+        image = image * self.keep_mask_object[[frame_idx], None]
+        image_ref = self.ref_mask_object[[frame_idx], None]  # (1, 1, W, W)
         loss_dict = {}
         if func == 'l2':
             loss_mask = torch.sum((image - image_ref)**2, dim=(2, 3))
-            loss_mask = loss_mask / (n * self.ref_mask_object.sum(dim=(-2,-1)))
+            loss_mask = loss_mask / (n * image_ref.sum(dim=(-2,-1)))
         elif func == 'iou':
             loss_mask = iou_loss(image, image_ref)
         elif func == 'l2_iou':
+            raise NotImplementedError
             loss_sil = torch.sum(
                 (image - self.ref_mask_object)**2, dim=(-2, -1)) 
-            loss_sil = loss_sil / self.ref_mask_object.sum(dim=(-2,-1))
+            loss_sil = loss_sil / image_ref.sum(dim=(-2,-1))
             with torch.no_grad():
-                iou_factor = iou_loss(image, self.ref_mask_object, post='rev')
+                iou_factor = iou_loss(image, image_ref, post='rev')
             loss_sil = loss_sil * iou_factor
 
         loss_dict["mask"] = loss_mask.squeeze_(0)

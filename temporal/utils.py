@@ -13,7 +13,8 @@ def init_6d_pose_from_bboxes(bboxes: torch.Tensor,
                              cam_mat: torch.Tensor,
                              num_init: int,
                              base_rotation=None,
-                             base_translation=None) -> Tuple[torch.Tensor]:
+                             base_translation=None,
+                             zero_init_transl=False) -> Tuple[torch.Tensor]:
     """
     Args:
         bboxes: (T, 4)
@@ -50,18 +51,21 @@ def init_6d_pose_from_bboxes(bboxes: torch.Tensor,
         (verts @ rotations).unsqueeze_(0),
         base_rotation.unsqueeze(1))  # (B, N_init, V, 3)
 
-    translations_init = []
-    for i in range(bsize):
-        _translations_init = TCO_init_from_boxes_zup_autodepth(
-            bboxes[[i],...], V_rotated[i], cam_mat[[i],...], 
-            ).unsqueeze_(1)
-        _translations_init -= base_translation[i]  # (N, 1, 3) - (1, 1, 3)
-        _translations_init = _translations_init @ base_rotation[i].T  # inv
-        translations_init.append(_translations_init)
-    if cam_mat.size(0) == 1:
-        translations_init = translations_init[0]
+    if zero_init_transl:
+        translations_init = torch.zeros_like(translations_init)
     else:
-        translations_init = sum(translations_init) / len(translations_init)
+        translations_init = []
+        for i in range(bsize):
+            _translations_init = TCO_init_from_boxes_zup_autodepth(
+                bboxes[[i],...], V_rotated[i], cam_mat[[i],...], 
+                ).unsqueeze_(1)
+            _translations_init -= base_translation[i]  # (N, 1, 3) - (1, 1, 3)
+            _translations_init = _translations_init @ base_rotation[i].T  # inv
+            translations_init.append(_translations_init)
+        if cam_mat.size(0) == 1:
+            translations_init = translations_init[0]
+        else:
+            translations_init = sum(translations_init) / len(translations_init)
     
     return rotations, translations_init
 
