@@ -22,12 +22,12 @@ from libyana.metrics.iou import batch_mask_iou
 
 
 class HOForwarderV2(nn.Module):
-    
+
     def __init__(self,
                  camintr: BatchCameraManager):
         """
         Args:
-            camintr: (B, 3, 3). 
+            camintr: (B, 3, 3).
                 Ihoi bounding box camera.
         """
         super().__init__()
@@ -35,7 +35,7 @@ class HOForwarderV2(nn.Module):
         self.bsize = bsize
         self.mask_size = 256
         self.register_buffer("camintr", camintr)
-        
+
         """ Set-up silhouettes renderer """
         self.renderer = nr.renderer.Renderer(
             image_size=self.mask_size,
@@ -52,7 +52,7 @@ class HOForwarderV2(nn.Module):
 
     def checkpoint(self, session=0):
         torch.save(self.state_dict(), f'/tmp/h{session}.pth')
-    
+
     def resume(self, session=0):
         self.load_state_dict(torch.load(f'/tmp/h{session}.pth'), strict=True)
 
@@ -106,7 +106,7 @@ class HOForwarderV2(nn.Module):
                              (target_masks_hand >= 0).float())
         mask_h, mask_w = target_masks_hand.shape[-2:]
         self.register_buffer(
-            "masks_human", 
+            "masks_human",
             target_masks_hand.view(self.bsize, 1, mask_h, mask_w).bool())
         self.cuda()
         self._check_shape_hand(self.bsize)
@@ -121,7 +121,7 @@ class HOForwarderV2(nn.Module):
         check_shape(self.translations_hand, (bsize, 1, 3))
         # ordinal loss
         check_shape(self.masks_human, (bsize, 1, self.mask_size, self.mask_size))
-    
+
     @property
     def rot_mat_hand(self) -> torch.Tensor:
         return rot6d_to_matrix(self.rotations_hand)
@@ -191,7 +191,7 @@ class HOForwarderV2(nn.Module):
             requires_grad=True)
         """ Translation is also a function of scale T(s) = s * T_init """
         self.scale_object = nn.Parameter(
-            torch.as_tensor([scale_object], 
+            torch.as_tensor([scale_object],
                             device=self.rotations_object.device),
             requires_grad=True)
 
@@ -215,7 +215,7 @@ class HOForwarderV2(nn.Module):
         self.register_buffer(
             "textures_object",
             torch.ones(faces_object.shape[0], 1, 1, 1, 3))
-    
+
     def set_obj_target(self, target_masks_object: torch.Tensor):
         """
         Args:
@@ -238,7 +238,7 @@ class HOForwarderV2(nn.Module):
         check_shape(self.keep_mask_object, mask_shape)
         check_shape(self.rotations_object, (num_init, 3, 2))
         check_shape(self.translations_object, (num_init, 1, 3))
-    
+
     @property
     def rot_mat_obj(self) -> torch.Tensor:
         return rot6d_to_matrix(self.rotations_object)
@@ -253,7 +253,7 @@ class HOForwarderV2(nn.Module):
             cam_idx: int
 
         Returns:
-            verts_object: (B, N, V, 3) 
+            verts_object: (B, N, V, 3)
                 or (1, N, V, 3) if cam_idx is not one
         """
         R_o2h = self.rot_mat_obj  # (N, 3, 3)
@@ -275,12 +275,12 @@ class HOForwarderV2(nn.Module):
             ) # (B, N, 1, 3)
         return torch.matmul(
             self.verts_object_og * scale, rots) + (scale * transl)
-    
+
 
 class HOForwarderV2Impl(HOForwarderV2):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-    
+
     def loss_sil_hand(self, compute_iou=False, func='iou'):
         """ returns: (B,) """
         rend = self.renderer(
@@ -291,18 +291,18 @@ class HOForwarderV2Impl(HOForwarderV2):
         image = self.keep_mask_hand * rend
         if func == 'l2':
             loss_sil = torch.sum(
-                (image - self.ref_mask_hand)**2, dim=(1, 2)) 
+                (image - self.ref_mask_hand)**2, dim=(1, 2))
             loss_sil = loss_sil / self.keep_mask_hand.sum(dim=(1,2))
         elif func == 'iou':
             loss_sil = iou_loss(image, self.ref_mask_hand)
         elif func == 'l2_iou':
             loss_sil = torch.sum(
-                (image - self.ref_mask_hand)**2, dim=(1, 2)) 
+                (image - self.ref_mask_hand)**2, dim=(1, 2))
             loss_sil = loss_sil / self.keep_mask_hand.sum(dim=(1,2))
             with torch.no_grad():
                 iou_factor = iou_loss(image, self.ref_mask_hand, post='rev')
             loss_sil = loss_sil * iou_factor
-        
+
         # loss_sil = loss_sil / self.bsize
         if compute_iou:
             ious = batch_mask_iou(image, self.ref_mask_hand)
@@ -338,7 +338,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         pred = self.translations_hand[1:-1]
         loss = torch.sum((interp - pred)**2, dim=(1, 2))
         return loss
-    
+
     def forward_hand(self,
                      loss_weights={
                          'sil': 1,
@@ -379,7 +379,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         diff = (dist**2).abs_()
         return diff
 
-    def render_obj(self, verts=None, cam_idx=None) -> torch.Tensor:
+    def render_obj(self, verts=None, sample_indices=None) -> torch.Tensor:
         """
         Renders objects according to current rotation and translation.
 
@@ -392,9 +392,10 @@ class HOForwarderV2Impl(HOForwarderV2):
         n = verts.size(1)
         batch_faces = self.faces_object.repeat(b, n, 1, 1)
         batch_K = self.camintr.unsqueeze(1).repeat(1, n, 1, 1)  # (B, 3, 3) -> (B, N, 3, 3)
-        if cam_idx is not None:
-            batch_K = batch_K[[cam_idx], ...]
-            
+        if sample_indices is None:
+            sample_indices = np.arange(self.bsize)
+        batch_K = batch_K[sample_indices, ...]
+
         images = self.renderer(
             verts.view(b*n, -1, 3),
             batch_faces.view(b*n, -1, 3),
@@ -403,12 +404,12 @@ class HOForwarderV2Impl(HOForwarderV2):
         images = images.view(b, n, self.mask_size, self.mask_size)
         return images
 
-    def simple_obj_sil(self, 
-                       frame_idx, 
-                       ret_iou=False, 
+    def simple_obj_sil(self,
+                       frame_idx,
+                       ret_iou=False,
                        func='l2') -> dict:
         """  For find_optimal_obj_pose()
-        returns: (N,) 
+        returns: (N,)
         """
         _, n, w = self.bsize, self.num_obj_init, self.mask_size
         verts = self.get_verts_object(frame_idx)
@@ -424,7 +425,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         elif func == 'l2_iou':
             raise NotImplementedError
             loss_sil = torch.sum(
-                (image - self.ref_mask_object)**2, dim=(-2, -1)) 
+                (image - self.ref_mask_object)**2, dim=(-2, -1))
             loss_sil = loss_sil / image_ref.sum(dim=(-2,-1))
             with torch.no_grad():
                 iou_factor = iou_loss(image, image_ref, post='rev')
@@ -439,18 +440,18 @@ class HOForwarderV2Impl(HOForwarderV2):
                     image_ref.repeat(1, n, 1, 1).view(n, w, w).detach())  # (B*N,)
                 iou = iou.view(n)  # (B, N)
             return iou
-        
+
         return loss_dict
 
-    def forward_obj_pose_render(self, 
-                                loss_only=True, 
+    def forward_obj_pose_render(self,
+                                loss_only=True,
                                 func='l2_iou',
                                 sample_indices=None) -> dict:
-        """ Reimplement the PoseRenderer.foward() 
+        """ Reimplement the PoseRenderer.foward()
 
         Args:
             v_obj (torch.Tensor): (B, N, V, 3)
-        
+
         Returns:
             loss_dict: dict with
                 - mask: (B, N)
@@ -461,11 +462,11 @@ class HOForwarderV2Impl(HOForwarderV2):
             sample_indices = np.arange(self.bsize)
 
         v_obj = self.get_verts_object()[sample_indices, ...]
-        image = self.render_obj(v_obj)  # (B, N, W, W)
+        image = self.render_obj(v_obj, sample_indices=sample_indices)  # (B, N, W, W)
         keep = self.keep_mask_object[sample_indices, None]
         image = keep * image
         image_ref = self.ref_mask_object[sample_indices, None]  # (B, 1, W, W)
-        
+
         loss_dict = {}
         if func == 'l2':
             loss_mask = torch.sum((image - image_ref)**2, dim=(-2,-1))
@@ -474,7 +475,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             loss_mask = iou_loss(image, image_ref)
         elif func == 'l2_iou':
             loss_mask = torch.sum(
-                (image - image_ref)**2, dim=(-2,-1)) 
+                (image - image_ref)**2, dim=(-2,-1))
             loss_mask = loss_mask / (n*image_ref.sum(dim=(-2,-1)))
             with torch.no_grad():
                 iou_factor = iou_loss(image, image_ref, post='rev')
@@ -529,19 +530,18 @@ class HOForwarderV2Impl(HOForwarderV2):
         too_far = torch.max(coord_z - self.renderer.far, zeros).sum(dim=(1, 2))
         loss = lower_right + upper_left + behind + too_far  # (B*N)
         return loss.view(b, n)
-    
+
     """ Hand-Object interaction """
 
     def loss_ordinal_depth(self, v_hand=None, v_obj=None):
-        if v_hand is None:
-            v_hand = self.get_verts_hand()
-        if v_obj is None:
-            v_obj = self.get_verts_object()
-    
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        b = v_obj.size(0)
+
         _, depths_o, silhouettes_o = self.renderer.render(
-            v_obj[:, 0], 
-            self.faces_object.repeat(self.bsize, 1, 1), 
-            self.textures_object.repeat(self.bsize, 1, 1, 1, 1, 1))  # (B, 256, 256)
+            v_obj[:, 0],
+            self.faces_object.repeat(b, 1, 1),
+            self.textures_object.repeat(b, 1, 1, 1, 1, 1))  # (B, 256, 256)
         silhouettes_o = (silhouettes_o == 1).bool()
 
         _, depths_p, silhouettes_p = self.renderer.render(
@@ -549,7 +549,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         silhouettes_p = (silhouettes_p == 1).bool()
 
         all_masks = torch.stack(
-            [self.ref_mask_object.bool(), self.ref_mask_hand.bool()], 
+            [self.ref_mask_object.bool(), self.ref_mask_hand.bool()],
             axis=1)
         silhouettes = [silhouettes_o, silhouettes_p]
         depths = [depths_o, depths_p]
@@ -557,42 +557,61 @@ class HOForwarderV2Impl(HOForwarderV2):
             all_masks, silhouettes, depths)
         return loss_dict['depth']
 
+    def physical_factor(self, sample_indices=None) -> torch.Tensor:
+        """ We should relate 3D distance to render image size
+        so they have similar magnitude.
+
+        d_pixel = d_3d * factor
+        loss = d_pixel**2
+
+        Returns:
+            factor : (B,), same length as sample_indces
+        """
+        sample_indices = np.arange(self.bsize) if sample_indices is None else sample_indices
+        fx = self.camintr[sample_indices, 0, 0]
+        return fx * self.mask_size
+
     def loss_center(self, obj_idx=0, v_hand=None, v_obj=None) -> torch.Tensor:
         """
         Args:
             obj_idx: int
             verts_hand: (B, V, 3)
             verts_obj: (B, V, 3)
-        
+
         Return:
             distance between obj and hand center
         """
+        # TODO phy_factor
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
         center_loss = F.mse_loss(v_hand.mean(1), v_obj[:, obj_idx].mean(1))
         return center_loss
-    
-    def loss_chamfer(self, 
-                     obj_idx=0, 
-                     batch_reduction='sum', 
+
+    def loss_chamfer(self,
+                     obj_idx=0,
                      v_hand=None,
-                     v_obj=None) -> torch.Tensor:
+                     v_obj=None,
+                     sample_indices=None) -> torch.Tensor:
         """ returns a scalar """
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_chamfer = compute_chamfer_distance(
             v_hand, v_obj[:, obj_idx],
-            batch_reduction=batch_reduction)
+            batch_reduction=None)  # (B,)
+        l_chamfer = self.physical_factor(sample_indices=sample_indices) * l_chamfer
+        l_chamfer = (l_chamfer**2).sum()
         return l_chamfer
-    
+
     def loss_nearest_dist(self, obj_idx=0, v_hand=None, v_obj=None) -> torch.Tensor:
         """ returns (B,) """
+        # TODO phy_factor
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_min_d = compute_nearest_dist(v_obj[:, obj_idx, ...], v_hand)
         return l_min_d
-    
+
     def loss_contact(self, obj_idx=0, v_hand=None, v_obj=None):
+        # TODO phy_factor
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_contact = lossutils.compute_contact_loss(
@@ -603,6 +622,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         return l_contact['contact']
 
     def loss_collision(self, obj_idx=0, v_hand=None, v_obj=None):
+        # TODO phy_factor
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object()[:, 0] if v_obj is None else v_obj
         l_collision = lossutils.compute_collision_loss(
@@ -620,21 +640,21 @@ import cv2
 
 
 class HOForwarderV2Vis(HOForwarderV2Impl):
-    def __init__(self, 
-                 vis_rend_size=256, 
-                 ihoi_img_patch=None, 
-                 *args, 
+    def __init__(self,
+                 vis_rend_size=256,
+                 ihoi_img_patch=None,
+                 *args,
                  **kwargs):
         super().__init__(*args, **kwargs)
         self.vis_rend_size = vis_rend_size
         self.ihoi_img_patch = ihoi_img_patch
-    
+
     def get_meshes(self, scene_idx, obj_idx, **mesh_kwargs) -> Tuple[SimpleMesh]:
         """
         Args:
             scene_idx: index of scene (timestep)
             obj_idx: -1 indicates no object
-        
+
         Returns:
             mhand: SimpleMesh
             mobj: SimpleMesh, or None if obj_idx < 0
@@ -653,7 +673,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
                     verts_obj, self.faces_object, tex_color=obj_color)
         return mhand, mobj
 
-    def to_scene(self, scene_idx=-1, obj_idx=0, 
+    def to_scene(self, scene_idx=-1, obj_idx=0,
                  show_axis=False, viewpoint='nr', **mesh_kwargs):
         """ Returns a trimesh.Scene """
         if scene_idx >= 0:
@@ -700,7 +720,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         return np.vstack([a,
                           b])
 
-    def render_scene(self, scene_idx, obj_idx=0, 
+    def render_scene(self, scene_idx, obj_idx=0,
                      with_hand=True, overlay_gt=False,
                      **mesh_kwargs) -> np.ndarray:
         """ returns: (H, W, 3) """

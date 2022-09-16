@@ -1,12 +1,12 @@
 import argparse
 import tqdm
+import numpy as np
 import torch
 from datetime import datetime
 from torch.utils import tensorboard
 from datasets.epic_clip import EpicClipDataset
 from homan.ho_forwarder_v2 import HOForwarderV2Impl, HOForwarderV2Vis
 from homan.utils.geometry import matrix_to_rot6d, rot6d_to_matrix
-from nnutils.hand_utils import ManopthWrapper
 from nnutils.handmocap import (
     get_handmocap_predictor,
     collate_mocap_hand,
@@ -17,10 +17,11 @@ from obj_pose.obj_loader import OBJLoader
 
 from nnutils import image_utils
 from temporal.optim_plan import (
-    optimize_hand, smooth_hand_pose, find_optimal_obj_pose,
+    optimize_hand, smooth_hand_pose,
     optimize_hand_allmask)
 from temporal.utils import init_6d_pose_from_bboxes
-from temporal import visualize
+from temporal.optim_plan import sampled_obj_optimize
+from temporal.utils import softmax_temp
 
 
 def get_args():
@@ -40,7 +41,7 @@ def get_args():
 def main(args):
     dataset = EpicClipDataset(
         image_sets='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json',
-        sample_frames=20)
+        sample_frames=30)
 
     obj_loader = OBJLoader()
     hand_predictor = get_handmocap_predictor()
@@ -49,13 +50,13 @@ def main(args):
 
     if args.index >= 0:
         fit_scene(dataset, hand_predictor, obj_loader,
-                  args.index, writer)
+                  args.index, writer=None)
         writer.close()
         return
     
     for index in tqdm.trange(len(dataset)):
         fit_scene(dataset, hand_predictor, obj_loader,
-                    index, writer)
+                    index, writer=None)
 
     writer.close()
 
@@ -95,19 +96,21 @@ def fit_scene(dataset,
         hand_cam=hand_cam)
 
     """ Extract mask input """
-    ihoi_box_expand = 1.0
+    ihoi_box_expand = 0.3  # 1.0
     rend_size = 256  # TODO
-    obj_bbox_squared = image_utils.square_bbox_xywh(
-        obj_bboxes, ihoi_box_expand).int()
+    USE_HAND_BBOX = True
+    hand_bboxes = torch.as_tensor(np.stack([v[side] for v in hand_bbox_dicts]))
+    bbox_squared = image_utils.square_bbox_xywh(
+        hand_bboxes if USE_HAND_BBOX else obj_bboxes, ihoi_box_expand).int()
     obj_mask_patch = image_utils.batch_crop_resize(
-        obj_masks, obj_bbox_squared, rend_size)
+        obj_masks, bbox_squared, rend_size)
     hand_mask_patch = image_utils.batch_crop_resize(
-        hand_masks, obj_bbox_squared, rend_size)
+        hand_masks, bbox_squared, rend_size)
     image_patch = image_utils.batch_crop_resize(
-        images, obj_bbox_squared, rend_size)
+        images, bbox_squared, rend_size)
     ihoi_h = torch.ones([len(global_cam)]) * rend_size
     ihoi_w = torch.ones([len(global_cam)]) * rend_size
-    ihoi_cam = global_cam.crop(obj_bbox_squared).resize(ihoi_h, ihoi_w)
+    ihoi_cam = global_cam.crop(bbox_squared).resize(ihoi_h, ihoi_w)
 
     homan = HOForwarderV2Vis(
         camintr=ihoi_cam.to_nr(return_mat=True),
@@ -124,6 +127,9 @@ def fit_scene(dataset,
     Step 1. Interpolate pca_pose
     Step 2. Optimize hand_mask
     """
+    fmt = f'output/temporal/{info.vid}_{info.gt_frame}_%s.png'
+    # homan.render_grid(obj_idx=-1, with_hand=False, low_reso=False).savefig(fmt % 'input')
+    # homan.render_grid(obj_idx=-1, with_hand=True, low_reso=False).savefig(fmt % 'raw')
     print("Optimize hand")
     homan = smooth_hand_pose(homan, lr=0.1)
     homan = optimize_hand(homan, verbose=False)
@@ -131,7 +137,7 @@ def fit_scene(dataset,
     obj_mesh = obj_loader.load_obj_by_name(cat, return_mesh=False)
     vertices = torch.as_tensor(obj_mesh.vertices, device='cuda')
     faces = torch.as_tensor(obj_mesh.faces, device='cuda')
-    num_initializations = 200
+    num_initializations = 1
     K_global = global_cam.get_K()
 
     device = 'cuda'
@@ -150,19 +156,20 @@ def fit_scene(dataset,
     homan.set_obj_target(obj_mask_patch)
     
     """
-    Optional?
-    Step 3. Optimize object mask with one frame, find best object rot + trans
-    """
-    # homan = find_optimal_obj_pose(homan, cam_idx=0)
-    # homan.rotations_object = torch.nn.Parameter(homan.rotations_object[[0],...])
-    # homan.translations_object = torch.nn.Parameter(homan.translations_object[[0],...])
-    # torch.cuda.empty_cache()
-    """
     Step 4. Optimize both hand+object mask using best object pose
     """
-    homan.info = info
-    homan = optimize_hand_allmask(
-        homan, num_steps=250, vis_interval=10, writer=writer)
+    # homan.info = info
+    # homan = optimize_hand_allmask(
+    #     homan, num_steps=250, vis_interval=10, writer=writer)
+
+    temp = 10
+    homan, weights = sampled_obj_optimize(
+        homan, num_epochs=10, num_iters=200, vis_interval=35,
+        temperature=temp,
+        ratio=0.75)
+
+    homan.render_grid(obj_idx=0, with_hand=True, low_reso=False).savefig(fmt % 'optim')
+    homan.to_scene(show_axis=False).export((fmt % 'mesh').replace('png', 'obj'))
 
 
 if __name__ == '__main__':

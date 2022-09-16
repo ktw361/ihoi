@@ -278,6 +278,7 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
                          num_iters=2000,
                          temperature=100.,
                          ratio=0.5,
+                         weights=None,
                          vis_interval=-1,
                          vis=False,
                          writer=None):
@@ -299,7 +300,7 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
         }
     ])
 
-    weights = homan.rotations_hand.new_zeros([homan.bsize])
+    weights = homan.rotations_hand.new_zeros([homan.bsize]) if weights is None else weights
 
     for e in range(num_epochs):
 
@@ -314,27 +315,29 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
                 v_hand = homan.get_verts_hand()[sample_indices, ...]
                 v_obj = homan.get_verts_object()[sample_indices, ...]
 
-                l_obj_dict = homan.forward_obj_pose_render(sample_indices=sample_indices)  # (B,N)
+                l_obj_dict = homan.forward_obj_pose_render(
+                    sample_indices=sample_indices)  # (B,N)
                 l_obj_mask = l_obj_dict['mask']
                 l_obj_offscreen = l_obj_dict['offscreen']
                 l_contact = homan.loss_chamfer(
-                    v_hand=v_hand, v_obj=v_obj,
-                    batch_reduction='sum')  # homan.loss_contact()
-                l_depth = homan.loss_ordinal_depth()
+                    v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices)
+                # l_depth = homan.loss_ordinal_depth(v_hand=v_hand, v_obj=v_obj)
+                min_dist = homan.loss_nearest_dist(v_hand=v_hand, v_obj=v_obj).min()
 
                 # Accumulate
-                l_obj_mask = 0.1 * l_obj_mask.sum()
-                l_obj_offscreen = 0.1 * l_obj_offscreen.sum()
-                l_depth = l_depth
-                l_contact = 10 * l_contact
-                tot_loss = l_obj_mask + l_obj_offscreen + l_depth + l_contact
+                l_obj_mask = l_obj_mask.sum()
+                l_obj_offscreen = torch.zeros_like((0.1 * l_obj_offscreen.sum()))
+                # l_depth = torch.zeros_like(l_depth)
+                l_contact = torch.zeros_like(100 * l_contact)
+                tot_loss = l_obj_mask + l_obj_offscreen + l_contact
 
                 if vis_interval > 0 and step % vis_interval == 0:
                     print(
                         f"obj_mask:{l_obj_mask.item():.3f} "
                         f"obj_offscrn:{l_obj_offscreen.item():.3f} "
-                        f"depth:{l_depth.item():.3f} "
+                        # f"depth:{l_depth.item():.3f} "
                         f"contact:{l_contact.item():.3f} "
+                        f"min_dist: {min_dist:.3f} "
                         )
                     if writer is None:
                         if vis:
