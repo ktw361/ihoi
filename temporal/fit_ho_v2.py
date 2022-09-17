@@ -127,7 +127,7 @@ def fit_scene(dataset,
     Step 1. Interpolate pca_pose
     Step 2. Optimize hand_mask
     """
-    fmt = f'output/temporal/{info.vid}_{info.gt_frame}_%s.png'
+    fmt = f'output/temporal/{info.vid}_{info.gt_frame}_%s'
     # homan.render_grid(obj_idx=-1, with_hand=False, low_reso=False).savefig(fmt % 'input')
     # homan.render_grid(obj_idx=-1, with_hand=True, low_reso=False).savefig(fmt % 'raw')
     print("Optimize hand")
@@ -168,8 +168,9 @@ def fit_scene(dataset,
         temperature=temp,
         ratio=0.75)
 
-    homan.render_grid(obj_idx=0, with_hand=True, low_reso=False).savefig(fmt % 'optim')
-    homan.to_scene(show_axis=False).export((fmt % 'mesh').replace('png', 'obj'))
+    homan.render_grid(obj_idx=0, with_hand=True, low_reso=False).savefig(fmt % 'optim.png')
+    homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
+    torch.save(homan.state_dict(), (fmt % 'weights.pth'))
 
 
 if __name__ == '__main__':
