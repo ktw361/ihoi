@@ -1,4 +1,4 @@
-weights/
+weights/*
 .ipynb_checkpoints/
 data/
 .vscode/
@@ -16,3 +16,4 @@ output
 externals/
 .env
 runs/
+!weights/contact_region.pkl

@@ -290,8 +290,6 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
     optimizer = torch.optim.Adam([
         {
             'params': [
-                # homan.rotations_hand,
-                # homan.translations_hand, # (B)
                 homan.rotations_object,  # (1,)
                 homan.translations_object,
                 homan.scale_object,

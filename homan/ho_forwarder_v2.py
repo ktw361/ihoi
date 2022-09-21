@@ -800,7 +800,8 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         imgs = []
         for cam_idx in range(l):
             img = self.render_scene(
-                scene_idx=cam_idx, obj_idx=obj_idx, with_hand=with_hand)
+                scene_idx=cam_idx, obj_idx=obj_idx, 
+                with_hand=with_hand, *args, **kwargs)
             imgs.append(img)
             if cam_idx == l-1:
                 break
@@ -816,9 +817,9 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         return out
 
     def render_grid(self, obj_idx=0, with_hand=True,
-                    figsize=(10, 10), low_reso=True):
+                    figsize=(10, 10), low_reso=True, *args, **kwargs):
         if low_reso:
-            out = self.render_grid_np(obj_idx=obj_idx, with_hand=with_hand)
+            out = self.render_grid_np(obj_idx=obj_idx, with_hand=with_hand, *args, **kwargs)
             fig, ax = plt.subplots()
             ax.imshow(out)
             plt.axis('off')
@@ -832,7 +833,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             sharex=True, sharey=True, figsize=figsize)
         for cam_idx, ax in enumerate(axes.flat, start=0):
             img = self.render_scene(
-                scene_idx=cam_idx, obj_idx=obj_idx, with_hand=with_hand)
+                scene_idx=cam_idx, obj_idx=obj_idx, with_hand=with_hand, *args, **kwargs)
             ax.imshow(img)
             ax.set_axis_off()
             if cam_idx == l-1:
