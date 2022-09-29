@@ -6,6 +6,7 @@ import neural_renderer as nr
 
 from nnutils.handmocap import get_hand_faces
 from homan import lossutils
+from homan.contact_prior import get_contact_regions
 from homan.homan_ManoModel import HomanManoModel
 from homan.utils.geometry import matrix_to_rot6d, rot6d_to_matrix
 from homan.ho_utils import (
@@ -35,6 +36,7 @@ class HOForwarderV2(nn.Module):
         self.bsize = bsize
         self.mask_size = 256
         self.register_buffer("camintr", camintr)
+        self.contact_regions = get_contact_regions()
 
         """ Set-up silhouettes renderer """
         self.renderer = nr.renderer.Renderer(
@@ -621,13 +623,60 @@ class HOForwarderV2Impl(HOForwarderV2):
             faces_hand=self.faces_hand)
         return l_contact['contact']
 
-    def loss_collision(self, obj_idx=0, v_hand=None, v_obj=None):
+    def loss_collision(self, obj_idx=0, v_hand=None, v_obj=None, sample_indices=None):
+        """ 
+        Returns:
+            (B,)
+        """
         # TODO phy_factor
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
-        v_obj = self.get_verts_object()[:, 0] if v_obj is None else v_obj
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_collision = lossutils.compute_collision_loss(
             v_hand, v_obj[:, obj_idx], self.faces_object.repeat(self.bsize, 1, 1))
-        return l_collision['collision']
+        l_collision = self.physical_factor(sample_indices=sample_indices) * l_collision
+        return l_collision
+    
+    """ Contact regions """
+    
+    def _get_distance_to_prior(self, primary_ind=-1, 
+                               obj_idx=0, v_hand=None, v_obj=None):
+        """ 
+        Returns: 
+            squared distance from one tip to the object.
+            If primary_ind < 0, return sum of these distances
+        """
+        k1, k2 = 1, 1
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        p2 = v_obj[:, obj_idx]
+        if primary_ind >= 0:
+            p = self.contact_regions.primary_verts[primary_ind]
+            p1 = v_hand[:, p, :]
+            l = lossutils.compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=False)
+            return l
+        else:
+            loss = v_hand.new_zeros([len(v_hand)])
+            for p in self.contact_regions.primary_verts:
+                p1 = v_hand[:, p, :]
+                l = lossutils.compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=False)
+                loss += l
+            return loss
+
+    def loss_contact_prior(self,
+                           obj_idx=0, v_hand=None, v_obj=None,
+                           sample_indices=None):
+        """
+        L = distance from finger tips to their nearest vertices
+
+        Returns:
+            loss: (B,)
+        """
+        num_primary = len(self.contact_regions.primary_verts)
+        loss = self._get_distance_to_prior(
+            obj_idx=obj_idx, v_hand=v_hand, v_obj=v_obj)
+        loss /= num_primary
+        loss *= self.physical_factor(sample_indices=sample_indices)
+        return loss
 
 
 from typing import List, Tuple

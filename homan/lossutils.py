@@ -19,6 +19,14 @@ def compute_pca_loss(mano_pca_comps):
 def compute_collision_loss(verts_hand,
                            verts_object,
                            faces_object):
+    """
+    Args:
+        verts_hand: (B, Vh, 3)
+        verts_object: (B, Vo, 3)
+
+    Returns:
+        sdf_loss: (B,)
+    """
     hand_nb = verts_hand.shape[0] // verts_object.shape[0]
     mano_faces = faces_object[0].new(MANO_CLOSED_FACES)
     if hand_nb > 1:
@@ -32,7 +40,7 @@ def compute_collision_loss(verts_hand,
     else:
         sdfl = scenesdf.SDFSceneLoss([mano_faces, faces_object[0]])
         sdf_loss, sdf_meta = sdfl([verts_hand, verts_object])
-    return {"collision": sdf_loss.mean()}
+    return sdf_loss
 
 
 def compute_intrinsic_scale_prior(intrinsic_scales, intrinsic_mean):
@@ -81,19 +89,43 @@ def compute_chamfer_distance(verts_a, verts_b, batch_reduction='sum') -> torch.T
     return dist
 
 
-def compute_nearest_dist(p_from: torch.Tensor, p_to: torch.Tensor) -> torch.Tensor:
-    """ Compute min distance from `p_from` to `p_to`
+def compute_nearest_dist(p1: torch.Tensor, 
+                         p2: torch.Tensor,
+                         k1=1,
+                         k2=1,
+                         ret_index=False) -> torch.Tensor:
+    """ Compute min squared distance from `p_from` to `p_to`.
+        loss = \sum_i d_iJ, i in I;
+        d_iJ = \sum_j d_iJ, j in J,
+        d_ij = | vi - vj |^2
+        where I = {i : d_iJ are top k_from smallest  in d_iJ }
+              J = {j : d_ij are top k_to smallest in dij }
 
     Args:
-        v_from : (B, Va, 3)
-        v_to : (B, Vb, 3)
+        p1 : (B, Va, 3)
+        p2 : (B, Vb, 3)
+        k1: int
+        k2: int
+        ret_index: bool
 
     Returns:
         dist: (B,)
+        - if ret_index:
+            from_index: (B, k_from)
+            to_index: (B, k_from, k_to)
+            
     """
-    dists = knn_points(p_from, p_to, K=1).dists
-    min_d = torch.min(dists, dim=1).values
-    return min_d
+    knn_ret = knn_points(p1, p2, K=k2)
+    d_iJ = knn_ret.dists.sum(dim=-1)  # (B, Va)
+    topk_ret = torch.topk(d_iJ, k=k1, dim=-1, largest=False, sorted=True)
+    d_IJ = topk_ret.values.sum(dim=-1) / (k1 * k2)
+
+    if ret_index:
+        from_index = topk_ret.indices
+        to_index = knn_ret.idx.gather(dim=1, index=from_index.unsqueeze(-1).tile(1, 1, k2))
+        return d_IJ, from_index, to_index
+
+    return d_IJ
 
 
 def compute_ordinal_depth_loss(masks:torch.Tensor, 

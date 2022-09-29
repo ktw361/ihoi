@@ -52,6 +52,12 @@ class SDFSceneLoss(nn.Module):
         """
         Args:
             vertices (list): list of (scene_nb, -1, 3) vertices
+        
+        Returns:
+            loss: (scene_nb,)
+            dict:
+                - sdfs
+                - dist_vals
         """
         num_objects = len(vertices)
         num_scenes = vertices[0].shape[0]
@@ -64,7 +70,7 @@ class SDFSceneLoss(nn.Module):
         for verts in vertices:
             checkshape.check_shape(verts, (-1, -1, 3), name="vertices")
         # If only one person in the scene, return 0
-        loss = torch.tensor(0., device=vertices[0].device)
+        loss = vertices[0].new_zeros([num_scenes])
         if num_objects == 1:
             return loss
         scene_boxes = []
@@ -117,5 +123,5 @@ class SDFSceneLoss(nn.Module):
                 idx1,
                 idx2)] = dist_vals[:, 0, :, 0, 0] * boxes_scale1.unsqueeze(1)
 
-            loss += dist_vals.sum()
+            loss += dist_vals.sum(dim=(1, 2, 3, 4))
         return loss, {"sdfs": obj_phis, "dist_values": dist_values}
