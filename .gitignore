@@ -16,4 +16,4 @@ output
 externals/
 .env
 runs/
-!weights/contact_region.pkl
+!weights/contact_regions.json
