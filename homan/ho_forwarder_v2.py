@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import neural_renderer as nr
 
 from nnutils.handmocap import get_hand_faces
+from nnutils.mesh_utils_extra import compute_vert_normals
 from homan import lossutils
 from homan.contact_prior import get_contact_regions
 from homan.homan_ManoModel import HomanManoModel
@@ -96,10 +97,12 @@ class HOForwarderV2(nn.Module):
             requires_grad=True)
 
         faces_hand = get_hand_faces(hand_side)
+        num_faces_hand = faces_hand.size(1)
         self.register_buffer(
             "textures_hand",
-            torch.ones(self.bsize, faces_hand.shape[1], 1, 1, 1, 3))
-        self.register_buffer("faces_hand", faces_hand.repeat(self.bsize, 1, 1))
+            torch.ones(self.bsize, num_faces_hand, 1, 1, 1, 3))
+        self.register_buffer(
+            "faces_hand", faces_hand.expand(self.bsize, num_faces_hand, 3))
         self.cuda()
 
     def set_hand_target(self, target_masks_hand):
@@ -240,6 +243,18 @@ class HOForwarderV2(nn.Module):
         check_shape(self.keep_mask_object, mask_shape)
         check_shape(self.rotations_object, (num_init, 3, 2))
         check_shape(self.translations_object, (num_init, 1, 3))
+    
+    def _expand_obj_faces(self, *precedings) -> torch.Tensor:
+        """
+        Args:
+            *precedings: 
+                e.g. self._expand_obj_faces(b, n) -> shape (b, n, f, 3)
+        
+        Returns:
+            obj_faces: (*precedings, F_o, 3)
+        """
+        num_obj_faces = self.faces_object.size(0)
+        return self.faces_object.expand(*precedings, num_obj_faces, 3)
 
     @property
     def rot_mat_obj(self) -> torch.Tensor:
@@ -392,8 +407,8 @@ class HOForwarderV2Impl(HOForwarderV2):
             verts = self.get_verts_object()  # (B, N, V, 3)
         b = verts.size(0)
         n = verts.size(1)
-        batch_faces = self.faces_object.repeat(b, n, 1, 1)
-        batch_K = self.camintr.unsqueeze(1).repeat(1, n, 1, 1)  # (B, 3, 3) -> (B, N, 3, 3)
+        batch_faces = self._expand_obj_faces(b, n)
+        batch_K = self.camintr.unsqueeze(1).expand(b, n, 3, 3)  # (B, 3, 3) -> (B, N, 3, 3)
         if sample_indices is None:
             sample_indices = np.arange(self.bsize)
         batch_K = batch_K[sample_indices, ...]
@@ -510,7 +525,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         """
         # On-screen means coord_xy between [-1, 1] and far > depth > 0
         b, n = verts.size(0), verts.size(1)
-        batch_K = self.camintr.unsqueeze(1).repeat(1, n, 1, 1)  # (B, N, 3, 3)
+        batch_K = self.camintr.unsqueeze(1).expand(b, n, 3, 3)  # (B, N, 3, 3)
         if sample_indices is None:
             sample_indices = np.arange(self.bsize)
         batch_K = batch_K[sample_indices, ...]
@@ -541,9 +556,8 @@ class HOForwarderV2Impl(HOForwarderV2):
         b = v_obj.size(0)
 
         _, depths_o, silhouettes_o = self.renderer.render(
-            v_obj[:, 0],
-            self.faces_object.repeat(b, 1, 1),
-            self.textures_object.repeat(b, 1, 1, 1, 1, 1))  # (B, 256, 256)
+            v_obj[:, 0], self._expand_obj_faces(b),
+            self.textures_object.expand(b, *self.textures_object.shape))  # (B, 256, 256)
         silhouettes_o = (silhouettes_o == 1).bool()
 
         _, depths_p, silhouettes_p = self.renderer.render(
@@ -619,7 +633,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         l_contact = lossutils.compute_contact_loss(
             verts_hand_b=v_hand,
             verts_object_b=v_obj[:, obj_idx],
-            faces_object=self.faces_object.repeat(self.bsize, 1, 1),
+            faces_object=self._expand_obj_faces(self.bsize),
             faces_hand=self.faces_hand)
         return l_contact['contact']
 
@@ -632,7 +646,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_collision = lossutils.compute_collision_loss(
-            v_hand, v_obj[:, obj_idx], self.faces_object.repeat(self.bsize, 1, 1))
+            v_hand, v_obj[:, obj_idx], self._expand_obj_faces(self.bsize))
         l_collision = self.physical_factor(sample_indices=sample_indices) * l_collision
         return l_collision
     
@@ -678,10 +692,42 @@ class HOForwarderV2Impl(HOForwarderV2):
         loss *= self.physical_factor(sample_indices=sample_indices)
         return loss
 
+    def _get_normal_to_prior(self, primary_ind=-1, 
+                               obj_idx=0, v_hand=None, v_obj=None):
+        """ 
+        Returns: 
+            TODO
+            squared distance from one tip to the object.
+            If primary_ind < 0, return sum of these distances
+        """
+        k1, k2 = 1, 1
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        p2 = v_obj[:, obj_idx]
+        if primary_ind >= 0:
+            p = self.contact_regions.primary_verts[primary_ind]
+            p1 = v_hand[:, p, :]
+            _, ind1, ind2 = lossutils.compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=True)
+            print(p2[:, ind2, :].shape)
+            print(p2.shape, ind2.shape)
+            print(p2.gather(dim=1, index=ind2).shape)
+            # return l
+        else:
+            loss = v_hand.new_zeros([len(v_hand)])
+            for p in self.contact_regions.primary_verts:
+                p1 = v_hand[:, p, :]
+                l = lossutils.compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=False)
+                loss += l
+            return loss
+        pass
+
+
 
 from typing import List, Tuple
+import trimesh
 import numpy as np
 from libzhifan.geometry import SimpleMesh, visualize_mesh, projection, CameraManager
+from libzhifan.geometry import visualize as geo_vis
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('svg')  # seems svg renders plt faster
@@ -721,6 +767,28 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
                 mobj = SimpleMesh(
                     verts_obj, self.faces_object, tex_color=obj_color)
         return mhand, mobj
+    
+    def finger_with_normals(self, scene_idx) -> trimesh.Scene:
+        """ Returns: a Scene with single hand, finger regions marked with normals. """
+        hand_color = 'light_blue'
+        with torch.no_grad():
+            verts_hand = self.get_verts_hand()[scene_idx]
+            vn = compute_vert_normals(verts_hand, self.faces_hand[scene_idx])
+            mhand = SimpleMesh(
+                verts_hand, self.faces_hand[scene_idx], tex_color=hand_color)
+            
+        paths = []
+        for v_inds in self.contact_regions.primary_verts:
+            geo_vis.color_verts(mhand, v_inds, (255, 0, 0))
+
+            v_parts = verts_hand[v_inds].cpu().numpy()
+            vn_parts = vn[v_inds].cpu().numpy()
+            vec = np.column_stack(
+                (v_parts, v_parts + (vn_parts * mhand.scale * .05)))
+            path = trimesh.load_path(vec.reshape(-1, 2, 3))
+            paths.append(path)
+
+        return trimesh.Scene([mhand] + paths)
 
     def to_scene(self, scene_idx=-1, obj_idx=0,
                  show_axis=False, viewpoint='nr', **mesh_kwargs):

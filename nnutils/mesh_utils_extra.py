@@ -96,7 +96,7 @@ def compute_face_normals(verts: torch.Tensor,
 
 def compute_vert_normals(verts: torch.Tensor,
                          faces: torch.Tensor,
-                         method: str) -> torch.Tensor:
+                         method: str = 'f') -> torch.Tensor:
     """
     if method == 'v', compute as 
         normed mean of all connected VERTICES,
@@ -132,14 +132,14 @@ def compute_vert_normals(verts: torch.Tensor,
         src = torch.cat([vn1, vn2, vn3], dim=2).view(bs, nf*3, 3)
         src = F.normalize(src, p=2, dim=2)
 
-        index = torch.tile(faces.view(1, nf*3, 1), [bs, 1, 3])
+        index = faces.view(1, nf*3, 1).expand(bs, nf*3, 3)
         vn = torch.zeros_like(verts).scatter_add_(dim=1, index=index, src=src)
     elif method == 'f':
         face_normals = compute_face_normals(verts, faces).unsqueeze_(2)  # (B, F, 1, 3)
         face_angles = compute_face_angles(verts, faces).unsqueeze_(3)  # (B, F, 3, 1)
         src = face_normals * face_angles  # (B, F, 3, 3)
         src = src.view(bs, nf*3, 3)
-        index = torch.tile(faces.view(1, nf*3, 1), [bs, 1, 3])
+        index = faces.view(1, nf*3, 1).expand(bs, nf*3, 3)
         vn = torch.zeros_like(verts).scatter_add_(dim=1, index=index, src=src)
     else:
         raise ValueError(f"method {method} not understood.")
