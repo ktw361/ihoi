@@ -1,32 +1,12 @@
 from typing import List
 import matplotlib.pyplot as plt
 import numpy as np
+from homan.ho_forwarder_v2 import HOForwarderV2, HOForwarderV2Vis
 from obj_pose.pose_optimizer import PoseOptimizer
+from moviepy import editor
 
 from libzhifan.geometry import visualize_mesh, SimpleMesh
-
-
-def plot_summaries(homans) -> plt.figure:
-    raise NotImplementedError
-    """ homans: list of HO_forwarder """
-    l = len(homans)
-    num_cols = 5
-    num_rows = l // num_cols + 1
-    fig, axes = plt.subplots(
-        nrows=num_rows, ncols=num_cols,
-        sharex=True, sharey=True, figsize=(20, 20))
-    idx = 0
-    for idx, ax in enumerate(axes.flat, start=0):
-        homan = homans[idx]
-        img = homan.render_summary()
-        ax.imshow(img)
-        ax.set_axis_off()
-        idx += 1
-        if idx >= l:
-            break
-
-    plt.tight_layout()
-    return fig
+from libzhifan.geometry import BatchCameraManager
 
 
 def plot_pose_summaries(pose_machine: PoseOptimizer,
@@ -77,3 +57,20 @@ def concat_pose_meshes(pose_machine: PoseOptimizer,
         visualize_mesh(meshes, show_axis=False).export(
             obj_file)
     return meshes
+
+
+def make_compare_video(homan: HOForwarderV2Vis,
+                       global_cam: BatchCameraManager,
+                       global_images: np.ndarray) -> List[np.ndarray]:
+    frames = []
+    for i in range(homan.bsize):
+        img_mesh = homan.render_global(
+            global_cam=global_cam,
+            global_images=global_images,
+            scene_idx=i,
+            obj_idx=0,
+            with_hand=True,
+            overlay_gt=False)
+        img = np.vstack([global_images[i] / 255, img_mesh])
+        frames.append(img)
+    return frames
