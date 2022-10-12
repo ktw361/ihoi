@@ -3,15 +3,14 @@ from libzhifan import io
 
 class ContactRegion(NamedTuple):
     """
-    primary_verts/faces: List of 5 finger regions
-        ordered from {thumb, index, middle, ring, pinky}
-    secondary_verts/faces: List of 3 hand regions
-        ordered from {thumb
+    In total 8 prior regions = 
+        5 fingers ordered from {thumb, index, middle, ring, pinky} +
+        3 palms parts ordered from {below-thumb, finger-root, edge}
+    
+    verts: contains indices to hand vertices
     """
-    primary_verts: List
-    primary_faces: List
-    secondary_verts: List
-    secondary_faces: List
+    verts: List[List]
+    faces: List[List]
 
 
 def get_contact_regions(path='weights/contact_regions.json'):

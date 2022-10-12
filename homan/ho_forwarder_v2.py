@@ -26,7 +26,7 @@ from libyana.metrics.iou import batch_mask_iou
 class HOForwarderV2(nn.Module):
 
     def __init__(self,
-                 camintr: BatchCameraManager):
+                 camintr: torch.Tensor):
         """
         Args:
             camintr: (B, 3, 3).
@@ -47,7 +47,7 @@ class HOForwarderV2(nn.Module):
             t=torch.zeros([1, 3], device='cuda'),
             orig_size=1)
         self.renderer.light_direction = [1, 0.5, 1]
-        self.renderer.light_intensity_direction = 0.3
+        self.renderer.light_intensity_direction = torch.as_tensor(0.3)
         self.renderer.light_intensity_ambient = 0.5
         self.renderer.background_color = [1.0, 1.0, 1.0]
 
@@ -408,7 +408,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         b = verts.size(0)
         n = verts.size(1)
         batch_faces = self._expand_obj_faces(b, n)
-        batch_K = self.camintr.unsqueeze(1).expand(b, n, 3, 3)  # (B, 3, 3) -> (B, N, 3, 3)
+        batch_K = self.camintr.unsqueeze(1).expand(self.bsize, n, 3, 3)  # (B, 3, 3) -> (B, N, 3, 3)
         if sample_indices is None:
             sample_indices = np.arange(self.bsize)
         batch_K = batch_K[sample_indices, ...]
@@ -525,7 +525,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         """
         # On-screen means coord_xy between [-1, 1] and far > depth > 0
         b, n = verts.size(0), verts.size(1)
-        batch_K = self.camintr.unsqueeze(1).expand(b, n, 3, 3)  # (B, N, 3, 3)
+        batch_K = self.camintr.unsqueeze(1).expand(self.bsize, n, 3, 3)  # (B, N, 3, 3)
         if sample_indices is None:
             sample_indices = np.arange(self.bsize)
         batch_K = batch_K[sample_indices, ...]
@@ -652,29 +652,23 @@ class HOForwarderV2Impl(HOForwarderV2):
     
     """ Contact regions """
     
-    def _get_distance_to_prior(self, primary_ind=-1, 
-                               obj_idx=0, v_hand=None, v_obj=None):
+    def get_distance_to_prior(self, obj_idx=0, v_hand=None, v_obj=None):
         """ 
         Returns: 
-            squared distance from one tip to the object.
-            If primary_ind < 0, return sum of these distances
+            (B, 5+3)
+            squared distance from prior regions to the object.
         """
         k1, k2 = 1, 1
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
+
         p2 = v_obj[:, obj_idx]
-        if primary_ind >= 0:
-            p = self.contact_regions.primary_verts[primary_ind]
+        loss = v_hand.new_zeros([v_hand.size(0), 8])
+        for i, p in enumerate(self.contact_regions.verts):
             p1 = v_hand[:, p, :]
             l = lossutils.compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=False)
-            return l
-        else:
-            loss = v_hand.new_zeros([len(v_hand)])
-            for p in self.contact_regions.primary_verts:
-                p1 = v_hand[:, p, :]
-                l = lossutils.compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=False)
-                loss += l
-            return loss
+            loss[:, i] = l
+        return loss
 
     def loss_contact_prior(self,
                            obj_idx=0, v_hand=None, v_obj=None,
@@ -685,11 +679,10 @@ class HOForwarderV2Impl(HOForwarderV2):
         Returns:
             loss: (B,)
         """
-        num_primary = len(self.contact_regions.primary_verts)
-        loss = self._get_distance_to_prior(
+        loss_prior = self.get_distance_to_prior(
             obj_idx=obj_idx, v_hand=v_hand, v_obj=v_obj)
-        loss /= num_primary
-        loss *= self.physical_factor(sample_indices=sample_indices)
+        loss = loss_prior[:, :5].mean(-1)
+        loss *= self.physical_factor(sample_indices=sample_indices) * 10
         return loss
 
     def _get_normal_to_prior(self, primary_ind=-1, 
@@ -935,6 +928,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
 
     def render_grid(self, obj_idx=0, with_hand=True,
                     figsize=(10, 10), low_reso=True, *args, **kwargs):
+        """ grip of  multiple render """
         if low_reso:
             out = self.render_grid_np(obj_idx=obj_idx, with_hand=with_hand, *args, **kwargs)
             fig, ax = plt.subplots()
@@ -949,11 +943,49 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             nrows=num_rows, ncols=num_cols,
             sharex=True, sharey=True, figsize=figsize)
         for cam_idx, ax in enumerate(axes.flat, start=0):
+            if cam_idx > l-1:
+                ax.set_axis_off()
+                continue
             img = self.render_scene(
                 scene_idx=cam_idx, obj_idx=obj_idx, with_hand=with_hand, *args, **kwargs)
             ax.imshow(img)
             ax.set_axis_off()
-            if cam_idx == l-1:
-                break
         plt.tight_layout()
         return fig
+
+    def render_global(self, 
+                      global_cam: BatchCameraManager, 
+                      global_images: np.ndarray, 
+                      scene_idx: int, 
+                      obj_idx=0,
+                      with_hand=True, 
+                      overlay_gt=False,
+                      ) -> np.ndarray:
+        """ returns: (H, W, 3) """
+        if not with_hand:
+            return self.ihoi_img_patch[scene_idx]
+        mhand, mobj = self.get_meshes(
+            scene_idx=scene_idx, obj_idx=obj_idx)
+        img = projection.perspective_projection_by_camera(
+            [mhand, mobj],
+            global_cam[scene_idx],
+            method=dict(
+                name='pytorch3d',
+                coor_sys='nr',
+                in_ndc=False
+            ),
+            image=global_images[scene_idx],
+        )
+
+        if overlay_gt:
+            all_mask = np.zeros_like(img, dtype=np.float32)
+            mask_hand = self.ref_mask_hand[scene_idx].cpu().numpy().squeeze()
+            all_mask = np.where(
+                mask_hand[...,None], (0, 0, 0.8), all_mask)
+            if obj_idx >= 0:
+                mask_obj = self.ref_mask_object[scene_idx].cpu().numpy()
+                all_mask = np.where(
+                    mask_obj[...,None], (0.6, 0, 0), all_mask)
+            all_mask = np.uint8(255*all_mask)
+            img = cv2.addWeighted(np.uint8(img*255), 0.9, all_mask, 0.5, 1.0)
+        return img
