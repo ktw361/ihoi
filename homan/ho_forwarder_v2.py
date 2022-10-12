@@ -762,7 +762,9 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         return mhand, mobj
     
     def finger_with_normals(self, scene_idx) -> trimesh.Scene:
-        """ Returns: a Scene with single hand, finger regions marked with normals. """
+        """ 
+        Returns: a Scene with single hand, finger regions marked with normals. 
+        """
         hand_color = 'light_blue'
         with torch.no_grad():
             verts_hand = self.get_verts_hand()[scene_idx]
@@ -902,7 +904,8 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         )
         return np.hstack([front, left, back])
 
-    def render_grid_np(self, obj_idx=0, with_hand=True, *args, **kwargs) -> np.ndarray:
+    def render_grid_np(self, obj_idx=0, with_hand=True, 
+                       sample_indices=None, *args, **kwargs) -> np.ndarray:
         """ low resolution but faster """
         l = self.bsize
         num_cols = 5
@@ -918,11 +921,20 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
 
         h, w, _ = imgs[0].shape
         out = np.empty(shape=(num_rows*h, num_cols*w, 3), dtype=imgs[0].dtype)
+        if sample_indices is None:
+            sample_indices = np.arange(self.bsize)
+        sample_indices = set(sample_indices)
         for row in range(num_rows):
             for col in range(num_cols):
-                if row*num_cols+col >= l:
+                idx = row*num_cols+col
+                if  idx >= l:
                     break
-                out[row*h:(row+1)*h, col*w:(col+1)*w, ...] = imgs[row*num_cols+col]
+                out[row*h:(row+1)*h, col*w:(col+1)*w, :] = imgs[idx]
+                # Draw red bounding box
+                if idx in sample_indices:
+                    out = cv2.rectangle(
+                        out, (col*w, row*h), ((col+1)*w, (row+1)*h),
+                        (1, 0, 0), thickness=8)
 
         return out
 
