@@ -98,19 +98,19 @@ def compute_vert_normals(verts: torch.Tensor,
                          faces: torch.Tensor,
                          method: str = 'f') -> torch.Tensor:
     """
-    if method == 'v', compute as 
-        normed mean of all connected VERTICES,
-        i.e. vn[i] = mean( eij x eik )
-
-    elif method == 'f', compte as
-        meaned weighted mean of all connected FACES, as Trimesh,
-        where weights are computed according to angles,
-        i.e. more flat faces contribute larger
-
     Args:
         verts: (B, V, 3) or (V, 3)
         faces: (F, 3) LongTensor
         method: one of {'v', 'f'}
+            if method == 'v', compute as 
+                normed mean of all connected VERTICES,
+                i.e. vn[i] = mean( eij x eik )
+
+            elif method == 'f', compte as
+                meaned weighted mean of all connected FACES, as Trimesh,
+                where weights are computed according to angles,
+                i.e. more flat faces contribute larger
+
     Returns:
         vert_normals: (B, V, 3) or (V, 3)
     """

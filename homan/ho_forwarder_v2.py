@@ -1,12 +1,13 @@
 from typing import Tuple, List
+from functools import reduce
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import neural_renderer as nr
+from pytorch3d.ops import knn_points, knn_gather
 
 from nnutils.handmocap import get_hand_faces
 from nnutils.mesh_utils_extra import compute_vert_normals
-from homan import lossutils
 from homan.contact_prior import get_contact_regions
 from homan.homan_ManoModel import HomanManoModel
 from homan.utils.geometry import matrix_to_rot6d, rot6d_to_matrix
@@ -14,8 +15,10 @@ from homan.ho_utils import (
     compute_transformation_ortho, compute_transformation_persp)
 
 from homan.lossutils import (
+    compute_ordinal_depth_loss, compute_contact_loss,
+    compute_collision_loss,
     iou_loss, rotation_loss_v1, compute_chamfer_distance,
-    compute_nearest_dist)
+    compute_nearest_dist, find_nearest_vecs)
 import roma
 
 from libzhifan.numeric import check_shape
@@ -569,7 +572,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             axis=1)
         silhouettes = [silhouettes_o, silhouettes_p]
         depths = [depths_o, depths_p]
-        loss_dict = lossutils.compute_ordinal_depth_loss(
+        loss_dict = compute_ordinal_depth_loss(
             all_masks, silhouettes, depths)
         return loss_dict['depth']
 
@@ -630,7 +633,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         # TODO phy_factor
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
-        l_contact = lossutils.compute_contact_loss(
+        l_contact = compute_contact_loss(
             verts_hand_b=v_hand,
             verts_object_b=v_obj[:, obj_idx],
             faces_object=self._expand_obj_faces(self.bsize),
@@ -642,10 +645,9 @@ class HOForwarderV2Impl(HOForwarderV2):
         Returns:
             (B,)
         """
-        # TODO phy_factor
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
-        l_collision = lossutils.compute_collision_loss(
+        l_collision = compute_collision_loss(
             v_hand, v_obj[:, obj_idx], self._expand_obj_faces(self.bsize))
         l_collision = self.physical_factor(sample_indices=sample_indices) * l_collision
         return l_collision
@@ -666,8 +668,37 @@ class HOForwarderV2Impl(HOForwarderV2):
         loss = v_hand.new_zeros([v_hand.size(0), 8])
         for i, p in enumerate(self.contact_regions.verts):
             p1 = v_hand[:, p, :]
-            l = lossutils.compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=False)
+            l = compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=False)
             loss[:, i] = l
+        return loss
+
+    def get_normal_to_prior(self, obj_idx=0, v_hand=None, v_obj=None):
+        """ 
+        Returns: 
+            TODO
+            squared distance from one tip to the object.
+        """
+        raise NotImplementedError
+        k1, k2 = 1, 1
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        vn_hand = compute_vert_normals(v_hand, faces=self.faces_hand[0])
+        vn_obj = compute_vert_normals(v_obj[:, obj_idx], faces=self.faces_object)
+        p2 = v_obj[:, obj_idx]
+        loss = v_hand.new_zeros([len(v_hand)])
+        
+        v1s, v2s, vn1s, vn2s = [], [], [], []
+        for p in self.contact_regions.verts:
+            p1 = v_hand[:, p, :]
+            l, i1, i2 = compute_nearest_dist(
+                p1, p2, k1=k1, k2=k2, ret_index=True)
+            v1, v2, _, _, vn1, vn2 = find_nearest_vecs(
+                p1, p2, k1=k1, k2=k2, pn1=vn_hand, pn2=vn_obj)
+            v2 = v2.squeeze_()  # (B, 3)
+            vn2 = vn2.squeeze_()  # (B, 3)
+
+            print(v2.shape)
+            loss += l
         return loss
 
     def loss_contact_prior(self,
@@ -684,36 +715,56 @@ class HOForwarderV2Impl(HOForwarderV2):
         loss = loss_prior[:, :5].mean(-1)
         loss *= self.physical_factor(sample_indices=sample_indices) * 10
         return loss
-
-    def _get_normal_to_prior(self, primary_ind=-1, 
-                               obj_idx=0, v_hand=None, v_obj=None):
-        """ 
-        Returns: 
-            TODO
-            squared distance from one tip to the object.
-            If primary_ind < 0, return sum of these distances
+    
+    def loss_insideness(self,
+                        obj_idx=0, v_hand=None, v_obj=None,
+                        sample_indices=None,
+                        debug_viz=False):
         """
-        k1, k2 = 1, 1
-        v_hand = self.get_verts_hand() if v_hand is None else v_hand
-        v_obj = self.get_verts_object() if v_obj is None else v_obj
-        p2 = v_obj[:, obj_idx]
-        if primary_ind >= 0:
-            p = self.contact_regions.primary_verts[primary_ind]
-            p1 = v_hand[:, p, :]
-            _, ind1, ind2 = lossutils.compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=True)
-            print(p2[:, ind2, :].shape)
-            print(p2.shape, ind2.shape)
-            print(p2.gather(dim=1, index=ind2).shape)
-            # return l
-        else:
-            loss = v_hand.new_zeros([len(v_hand)])
-            for p in self.contact_regions.primary_verts:
-                p1 = v_hand[:, p, :]
-                l = lossutils.compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=False)
-                loss += l
-            return loss
-        pass
+        For all p in object, find nearest K prior points,
+            compute signed distance (optional: inner product) as loss at this p.
+            negative indicate Wrong position.
+            
+            Loss = \Avg -1.0 * max(loss_p, 0)
 
+        Returns:
+            loss: (B, V)
+        """
+        k2 = 3
+        if sample_indices is None:
+            sample_indices = np.arange(self.bsize)
+
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        vn_hand = compute_vert_normals(v_hand, faces=self.faces_hand[0])
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        p_obj = v_obj[:, obj_idx]
+
+        p2_idx = reduce(lambda a, b: a + b, self.contact_regions.verts, [])
+        p2 = v_hand[:, p2_idx, :]
+        vn_hand_part = vn_hand[:, p2_idx, :]
+
+        _, idx, nn = knn_points(p_obj, p2, K=k2, return_nn=True)
+        nn_normals = knn_gather(vn_hand_part, idx)
+        p1 = p_obj.unsqueeze(2).expand(-1, -1, k2, -1)
+
+        vec = (p1 - nn)  # (B, V, k2, 3)
+        prod = (vec * nn_normals).sum(-1)  # (B, V, k2)
+        score  = prod.mean(-1)  # (B, V)
+        loss =  (- score.clamp_max_(0)).mean(-1)
+        loss *= self.physical_factor(sample_indices)
+
+        if debug_viz:
+            scene = 0
+            vals = score[scene].detach().cpu().numpy()
+            mhand, mobj = self.get_meshes(scene, obj_idx)
+            colors = np.where(
+                vals[..., None] >= 0,
+                mobj.visual.vertex_colors,
+                trimesh.visual.interpolate(vals, color_map='jet'))
+            mobj.visual.vertex_colors = colors
+            return trimesh.Scene([mhand, mobj])
+            
+        return loss
 
 
 from typing import List, Tuple
@@ -815,7 +866,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             for part in self.contact_regions.verts[:regions]:
                 p1 = v_hand[:, part, :]
                 pn1 = vn_hand[:, part, :]
-                v1, v2, vh_ind, vo_ind, vn1, vn2 = lossutils.find_nearest_vecs(
+                v1, v2, vh_ind, vo_ind, vn1, vn2 = find_nearest_vecs(
                     p1, p2, k1=k1, k2=k2, pn1=pn1, pn2=vn_obj)
                 """
                 To get index in the hand,

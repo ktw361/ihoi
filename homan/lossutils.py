@@ -1,3 +1,4 @@
+from collections import namedtuple
 from typing import List
 import numpy as np
 import torch
@@ -5,6 +6,8 @@ import torch
 from pytorch3d.loss import chamfer_distance
 from pytorch3d.ops import knn_points
 from homan.interactions import contactloss, scenesdf
+
+from libzhifan.numeric import gather_ext
 
 
 # MANO_CLOSED_FACES = np.array(
@@ -94,7 +97,7 @@ def compute_nearest_dist(p1: torch.Tensor,
                          k1=1,
                          k2=1,
                          ret_index=False) -> torch.Tensor:
-    """ Compute min squared distance from `p_from` to `p_to`.
+    """ Compute squared minimum distance from `p_from` to `p_to`.
         loss = \sum_i d_iJ, i in I;
         d_iJ = \sum_j d_iJ, j in J,
         d_ij = | vi - vj |^2
@@ -113,7 +116,6 @@ def compute_nearest_dist(p1: torch.Tensor,
         - if ret_index:
             from_index: (B, k_from)
             to_index: (B, k_from, k_to)
-            
     """
     knn_ret = knn_points(p1, p2, K=k2)
     d_iJ = knn_ret.dists.sum(dim=-1)  # (B, Va)
@@ -126,6 +128,60 @@ def compute_nearest_dist(p1: torch.Tensor,
         return d_IJ, from_index, to_index
 
     return d_IJ
+
+
+nearest_return_type = namedtuple("return_type", 
+                                 "p1_vecs p2_vecs p_ind1 p_ind2 pn1_vecs pn2_vecs")
+def find_nearest_vecs(p1: torch.Tensor,
+                      p2: torch.Tensor,
+                      k1=1,
+                      k2=1,
+                      pn1: torch.Tensor = None,
+                      pn2: torch.Tensor = None):
+    """ Find k1 vectors in p1, (k1 x k2) vectors in p2,
+     such that they satisfy the best squared minimum distance from `p_from` to `p_to`.
+     See compute_nearest_dist()
+
+    Args:
+        p1 : (B, Va, 3)
+        p2 : (B, Vb, 3)
+        k1: int
+        k2: int
+        pn1: (B, Va, ...) auxillary data to collect using nearest index, e.g. Normals
+        pn2: (B, Vb, ...)
+
+    Returns: return_type
+        p1_vecs: (B, k1, 3)
+        p2_vecs: (B, k1, k2, 3)
+        p_ind1:   (B, k1)
+        p_ind2:   (B, k1, k2)
+        pn1_vecs: (B, k1, 3)
+        pn2_vecs: (B, k1, k2, 3)
+    """
+    knn_ret = knn_points(p1, p2, K=k2)
+    d_iJ = knn_ret.dists.sum(dim=-1)  # (B, Va)
+    topk_ret = torch.topk(d_iJ, k=k1, dim=-1, largest=False, sorted=True)
+    p_ind1 = topk_ret.indices
+    p1_vecs = gather_ext(p1, p_ind1, dim=1)
+    
+    p2_shape = (p1.size(0), p1.size(1), p2.size(1), 3)
+    p2_rep = p2.unsqueeze(1).expand(p2_shape)
+    p2_vecs = gather_ext(p2_rep, knn_ret.idx, dim=2)  # For all p1, get k2
+    p2_vecs = gather_ext(p2_vecs, p_ind1, dim=1)  # Then get k1
+
+    p_ind2 = gather_ext(knn_ret.idx, p_ind1, dim=1)
+
+    pn1_vecs, pn2_vecs = None, None
+    if pn1 is not None:
+        pn1_vecs = gather_ext(pn1, p_ind1, dim=1)
+    if pn2 is not None:
+        pn2_rep = pn2.unsqueeze(1).expand(p2_shape)
+        pn2_vecs = gather_ext(pn2_rep, knn_ret.idx, dim=2)
+        pn2_vecs = gather_ext(pn2_vecs, p_ind1, dim=1)
+
+    ret = nearest_return_type(
+        p1_vecs, p2_vecs, p_ind1, p_ind2, pn1_vecs, pn2_vecs)
+    return ret
 
 
 def compute_ordinal_depth_loss(masks:torch.Tensor, 
