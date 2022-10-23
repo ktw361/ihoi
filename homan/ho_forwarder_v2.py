@@ -761,7 +761,8 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
                     verts_obj, self.faces_object, tex_color=obj_color)
         return mhand, mobj
     
-    def finger_with_normals(self, scene_idx) -> trimesh.Scene:
+    def finger_with_normals(self, scene_idx, 
+                            regions=(0,1,2,3,4,5,6,7)) -> trimesh.Scene:
         """ 
         Returns: a Scene with single hand, finger regions marked with normals. 
         """
@@ -773,7 +774,9 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
                 verts_hand, self.faces_hand[scene_idx], tex_color=hand_color)
             
         paths = []
-        for v_inds in self.contact_regions.primary_verts:
+        for i, v_inds in enumerate(self.contact_regions.verts):
+            if i not in regions:
+                continue
             geo_vis.color_verts(mhand, v_inds, (255, 0, 0))
 
             v_parts = verts_hand[v_inds].cpu().numpy()
@@ -784,6 +787,72 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             paths.append(path)
 
         return trimesh.Scene([mhand] + paths)
+
+    def visualize_nearest_normals(self, 
+                                  scene_idx,
+                                  display=('hand', 'obj', 'normals'),
+                                  regions=5,
+                                  ) -> trimesh.Scene:
+        """ 
+        Visualize each region's nearest point to the object
+        """
+        # Find nearest point indices
+        k1, k2 = 1, 1
+        obj_idx = 0
+        h_paths = []
+        o_paths = []
+        vh_inds = []
+        vo_inds = []
+        with torch.no_grad():
+            v_hand = self.get_verts_hand()
+            v_obj = self.get_verts_object()
+            vn_hand = compute_vert_normals(v_hand, faces=self.faces_hand[0])
+            vn_obj = compute_vert_normals(v_obj[:, obj_idx], faces=self.faces_object)
+            mhand = SimpleMesh(v_hand[scene_idx], self.faces_hand[scene_idx])
+            mobj = SimpleMesh(v_obj[scene_idx, obj_idx], self.faces_object)
+            p2 = v_obj[:, obj_idx]
+            
+            for part in self.contact_regions.verts[:regions]:
+                p1 = v_hand[:, part, :]
+                pn1 = vn_hand[:, part, :]
+                v1, v2, vh_ind, vo_ind, vn1, vn2 = lossutils.find_nearest_vecs(
+                    p1, p2, k1=k1, k2=k2, pn1=pn1, pn2=vn_obj)
+                """
+                To get index in the hand,
+                first get index 
+                """
+                vh_ind = vh_ind[scene_idx].squeeze().item()
+                vh_ind = part[vh_ind]
+                vh_inds.append( vh_ind )
+                vo_inds.append( vo_ind[scene_idx].squeeze().item() )
+
+                v1 = v1[scene_idx].cpu().numpy()
+                vn1 = vn1[scene_idx].cpu().numpy()
+                v2 = v2.squeeze_(1)[scene_idx].cpu().numpy()  # (1, 3)
+                vn2 = vn2.squeeze_(1)[scene_idx].cpu().numpy()  # (1, 3)
+                vec1 = np.column_stack(
+                    (v1, v1 + (vn1 * mhand.scale * 0.05)))
+                vec2 = np.column_stack(
+                    (v2, v2 + (vn2 * mobj.scale * 0.05)))
+                vec1 = trimesh.load_path(vec1.reshape(-1, 2, 3))
+                vec2 = trimesh.load_path(vec2.reshape(-1, 2, 3))
+                h_paths.append(vec1)
+                o_paths.append(vec2)
+            
+            geo_vis.color_verts(mhand, vh_inds, (255, 0, 0))
+            geo_vis.color_verts(mobj, vo_inds, (0, 0, 255))
+        
+        scene_geoms = []
+        if 'hand' in display:
+            scene_geoms.append(mhand)
+        if 'obj' in display:
+            scene_geoms.append(mobj)
+        if 'normals' in display:
+            if 'hand' in display:
+                scene_geoms += h_paths
+            if 'obj' in display:
+                scene_geoms += o_paths
+        return trimesh.Scene(scene_geoms)
 
     def to_scene(self, scene_idx=-1, obj_idx=0,
                  show_axis=False, viewpoint='nr', **mesh_kwargs):

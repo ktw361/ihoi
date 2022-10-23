@@ -28,7 +28,7 @@ def init_6d_pose_from_bboxes(bboxes: torch.Tensor,
         translations: (num_init, 1, 3)
     """
     device = 'cuda'
-    bsize = len(bboxes)
+    bsize = len(cam_mat)
     rotations = compute_random_rotations(B=num_init, upright=False, device=device)
     check_shape(cam_mat, (bsize, 3, 3))
     if base_rotation is not None:

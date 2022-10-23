@@ -23,11 +23,13 @@ cd ../
 # See https://detectron2.readthedocs.io/tutorials/install.html for other installation options
 
 
-# install neural_renderer and sdf for HOMAN
+# install neural_renderer for HOMAN
 mkdir -p external
 git clone https://github.com/hassony2/multiperson.git externals/multiperson
 pip install externals/multiperson/neural_renderer
-pip install externals/multiperson/sdf
+
+# install sdf
+pip install git+https://github.com/ktw361/sdf_pytorch
 
 
 # install Roma rotation library

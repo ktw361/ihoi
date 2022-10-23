@@ -17,11 +17,9 @@ from obj_pose.obj_loader import OBJLoader
 
 from nnutils import image_utils
 from temporal.optim_plan import (
-    optimize_hand, smooth_hand_pose,
-    optimize_hand_allmask)
-from temporal.utils import init_6d_pose_from_bboxes
+    optimize_hand, smooth_hand_pose)
 from temporal.optim_plan import sampled_obj_optimize
-from temporal.utils import softmax_temp
+from temporal.utils import init_6d_pose_from_bboxes, softmax_temp
 
 
 def get_args():
@@ -53,7 +51,7 @@ def main(args):
                   args.index, writer=None)
         writer.close()
         return
-    
+
     for index in tqdm.trange(len(dataset)):
         fit_scene(dataset, hand_predictor, obj_loader,
                     index, writer=None)
@@ -61,11 +59,11 @@ def main(args):
     writer.close()
 
 
-def fit_scene(dataset, 
+def fit_scene(dataset,
               hand_predictor,
               obj_loader,
               index: int,
-              writer=None): 
+              writer=None):
     device = 'cuda'
     info = dataset.data_infos[index]
     images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat = dataset[index]
@@ -144,9 +142,9 @@ def fit_scene(dataset,
     rotations, translations = init_6d_pose_from_bboxes(
         obj_bboxes, vertices, cam_mat=K_global,
         num_init=num_initializations,
-        base_rotation=rot6d_to_matrix(homan.rotations_hand), 
+        base_rotation=rot6d_to_matrix(homan.rotations_hand),
         base_translation=homan.translations_hand)
-    
+
     homan.set_obj_params(
         translations_object=translations,
         rotations_object=rotations,
@@ -154,7 +152,7 @@ def fit_scene(dataset,
         faces_object=faces,
         scale_object=1.0)
     homan.set_obj_target(obj_mask_patch)
-    
+
     """
     Step 4. Optimize both hand+object mask using best object pose
     """
