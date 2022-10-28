@@ -3,7 +3,6 @@ import tqdm
 import numpy as np
 import torch
 from datetime import datetime
-from torch.utils import tensorboard
 from datasets.epic_clip import EpicClipDataset
 from homan.ho_forwarder_v2 import HOForwarderV2Vis
 from homan.utils.geometry import rot6d_to_matrix
@@ -31,6 +30,10 @@ def get_args():
     parser.add_argument(
         "--image_sets",
         default='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json')
+    parser.add_argument(
+        '--save_video', default=False, action='store_true')
+    parser.add_argument(
+        '--result_dir', default='output/temporal_v3')
 
     args = parser.parse_args()
     return args
@@ -43,27 +46,30 @@ def main(args):
 
     obj_loader = OBJLoader()
     hand_predictor = get_handmocap_predictor()
-    writer = tensorboard.writer.SummaryWriter(
-        log_dir=f"runs/{datetime.now().strftime('%m-%d_%H:%M')}")
+    save_video = args.save_video
 
     if args.index >= 0:
         fit_scene(dataset, hand_predictor, obj_loader,
-                  args.index, writer=None)
-        writer.close()
+                  args.index, result_dir=args.result_dir,
+                  save_video=save_video)
         return
 
     for index in tqdm.trange(len(dataset)):
         fit_scene(dataset, hand_predictor, obj_loader,
-                    index, writer=None)
-
-    writer.close()
+                  index, result_dir=args.result_dir,
+                  save_video=save_video)
 
 
 def fit_scene(dataset,
               hand_predictor,
               obj_loader,
               index: int,
-              writer=None):
+              result_dir: str,
+              save_video=False):
+    """
+    Args:
+        result_dir: e.g. output/temporal
+    """
     device = 'cuda'
     info = dataset.data_infos[index]
     images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat = dataset[index]
@@ -125,7 +131,7 @@ def fit_scene(dataset,
     Step 1. Interpolate pca_pose
     Step 2. Optimize hand_mask
     """
-    fmt = f'output/temporal/{info.vid}_{info.gt_frame}_%s'
+    fmt = f'{result_dir}/{info.vid}_{info.gt_frame}_%s'
     # homan.render_grid(obj_idx=-1, with_hand=False, low_reso=False).savefig(fmt % 'input')
     # homan.render_grid(obj_idx=-1, with_hand=True, low_reso=False).savefig(fmt % 'raw')
     print("Optimize hand")
@@ -158,15 +164,16 @@ def fit_scene(dataset,
     """
 
     temp = 10
-    homan, weights, results = reinit_sample_optimize(
+    save_grid = (fmt % 'optim.mp4') if save_video else None
+    homan, _, results = reinit_sample_optimize(
         homan, global_cam=K_global, 
         num_epochs=40, num_iters=50, vis_interval=25,
-        temperature=temp,
+        temperature=temp, save_grid=save_grid,
         ratio=0.75)
 
     homan.render_grid(obj_idx=0, with_hand=True, low_reso=False).savefig(fmt % 'optim.png')
     homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
-    torch.save(homan.state_dict(), (fmt % 'weights.pth'))
+    torch.save(homan, (fmt % 'model.pth'))
     torch.save(results, (fmt % 'results.pth'))
 
 

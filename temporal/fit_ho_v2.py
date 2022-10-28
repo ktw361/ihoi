@@ -168,7 +168,7 @@ def fit_scene(dataset,
 
     homan.render_grid(obj_idx=0, with_hand=True, low_reso=False).savefig(fmt % 'optim.png')
     homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
-    torch.save(homan.state_dict(), (fmt % 'weights.pth'))
+    torch.save(homan, (fmt % 'model.pth'))
 
 
 if __name__ == '__main__':
