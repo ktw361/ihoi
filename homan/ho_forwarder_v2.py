@@ -1,3 +1,5 @@
+from enum import EnumMeta
+from re import I
 from typing import Tuple, List
 from functools import reduce
 import torch
@@ -5,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import neural_renderer as nr
 from pytorch3d.ops import knn_points, knn_gather
+from torch_scatter import scatter_min
 
 from nnutils.handmocap import get_hand_faces
 from nnutils.mesh_utils_extra import compute_vert_normals
@@ -660,6 +663,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             (B, 5+3)
             squared distance from prior regions to the object.
         """
+        raise ValueError("Use loss_closesness")
         k1, k2 = 1, 1
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
@@ -701,28 +705,64 @@ class HOForwarderV2Impl(HOForwarderV2):
             loss += l
         return loss
 
-    def loss_contact_prior(self,
-                           obj_idx=0, v_hand=None, v_obj=None,
-                           sample_indices=None):
+    def loss_closeness(self,
+                       obj_idx=0, v_hand=None, v_obj=None,
+                       squared_dist=False,
+                       num_priors=8, reduce_type='avg',
+                       sample_indices=None):
         """
         L = distance from finger tips to their nearest vertices
+        average over 8(=5+3) regions.
+        Options:
+            (5 regions vs 8 regions) x (min vs avg)
+        
+        Args:
+            squared_dist: whether to calc loss as squared distance
+            num_priors: 5 or 8
+            reduce: 'min' or 'avg'
 
         Returns:
             loss: (B,)
         """
-        loss_prior = self.get_distance_to_prior(
-            obj_idx=obj_idx, v_hand=v_hand, v_obj=v_obj)
-        loss = loss_prior[:, :5].mean(-1)
-        loss *= self.physical_factor(sample_indices=sample_indices) * 10
+        if sample_indices is None:
+            sample_indices = np.arange(self.bsize)
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        v_obj = v_obj[:, obj_idx]
+        vn_obj = compute_vert_normals(v_obj, faces=self.faces_object)
+
+        ph_idx = reduce(lambda a, b: a + b, self.contact_regions.verts, [])
+        ph = v_hand[:, ph_idx, :]
+        _, idx, nn = knn_points(ph, v_obj, K=1, return_nn=True)
+        nn = nn.squeeze_(2)
+        vn_obj_nn = knn_gather(vn_obj, idx).squeeze_(2)
+
+        prod = torch.sum((ph - nn) * vn_obj_nn, dim=-1)  # (B, V_h)
+        index = torch.cat(
+            [prod.new_zeros(len(v), dtype=torch.long) + i
+             for i, v in enumerate(self.contact_regions.verts)])
+        regions_min, _ = scatter_min(src=prod, index=index, dim=1)  # (B, 8)
+        if squared_dist:
+            regions_min = regions_min**2
+        else:
+            regions_min = regions_min.abs_()
+        regions_min = regions_min[:, :num_priors]
+        if reduce_type == 'min':
+            loss = regions_min.min(dim=-1).values
+        elif reduce_type == 'avg':
+            loss = regions_min.mean(dim=-1)
+
+        loss *= self.physical_factor(sample_indices=sample_indices)
         return loss
     
     def loss_insideness(self,
                         obj_idx=0, v_hand=None, v_obj=None,
+                        squared_dist=False,
                         sample_indices=None,
                         debug_viz=False):
         """
         For all p in object, find nearest K prior points,
-            compute signed distance (optional: inner product) as loss at this p.
+            compute distance (inner product w/ normal) as loss at this p.
             negative indicate Wrong position.
             
             Loss = \Avg -1.0 * max(loss_p, 0)
@@ -749,6 +789,8 @@ class HOForwarderV2Impl(HOForwarderV2):
 
         vec = (p1 - nn)  # (B, V, k2, 3)
         prod = (vec * nn_normals).sum(-1)  # (B, V, k2)
+        if squared_dist:
+            prod = prod**2
         score  = prod.mean(-1)  # (B, V)
         loss =  (- score.clamp_max_(0)).mean(-1)
         loss *= self.physical_factor(sample_indices)

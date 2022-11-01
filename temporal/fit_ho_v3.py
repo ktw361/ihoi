@@ -1,4 +1,5 @@
 import argparse
+import os
 import tqdm
 import numpy as np
 import torch
@@ -132,6 +133,7 @@ def fit_scene(dataset,
     Step 2. Optimize hand_mask
     """
     fmt = f'{result_dir}/{info.vid}_{info.gt_frame}_%s'
+    os.makedirs(result_dir, exist_ok=True)
     # homan.render_grid(obj_idx=-1, with_hand=False, low_reso=False).savefig(fmt % 'input')
     # homan.render_grid(obj_idx=-1, with_hand=True, low_reso=False).savefig(fmt % 'raw')
     print("Optimize hand")
@@ -169,6 +171,7 @@ def fit_scene(dataset,
         homan, global_cam=K_global, 
         num_epochs=40, num_iters=50, vis_interval=25,
         temperature=temp, save_grid=save_grid,
+        with_contact=True,
         ratio=0.75)
 
     homan.render_grid(obj_idx=0, with_hand=True, low_reso=False).savefig(fmt % 'optim.png')

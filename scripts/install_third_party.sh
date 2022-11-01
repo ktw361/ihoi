@@ -36,3 +36,8 @@ pip install git+https://github.com/ktw361/sdf_pytorch
 git clone https://github.com/naver/roma externals/roma
 cd externals/roma && git checkout 22806dfb43329b9bf1dd2cead7e96720330e3151
 pip install externals/roma
+
+
+# Install torch_scatter (we use scatter_min)
+# E.g. for python3.8 torch1.8 cuda 10.2:
+# pip install https://data.pyg.org/whl/torch-1.8.0%2Bcu102/torch_scatter-2.0.8-cp38-cp38-linux_x86_64.whl
