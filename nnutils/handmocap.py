@@ -1,5 +1,6 @@
 from typing import Tuple
 import os.path as osp
+from hydra.utils import to_absolute_path
 import torch
 
 import pytorch3d.transforms.rotation_conversions as rot_cvt
@@ -59,8 +60,8 @@ def get_handmocap_predictor(
         smpl_dir='extra_data/smpl/',
     ):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    hand_mocap = HandMocap(osp.join(mocap_dir, checkpoint_hand),
-        osp.join(mocap_dir, smpl_dir), device = device)
+    hand_mocap = HandMocap(to_absolute_path(osp.join(mocap_dir, checkpoint_hand)),
+        to_absolute_path(osp.join(mocap_dir, smpl_dir)), device = device)
     return hand_mocap
 
 

@@ -1,8 +1,7 @@
 from collections import namedtuple
-from typing import NamedTuple, Union
+from typing import NamedTuple
 from black import E
 import tqdm
-import numpy as np
 import torch
 from homan.ho_forwarder_v2 import HOForwarderV2Vis, HOForwarderV2Impl
 from homan.utils.geometry import rot6d_to_matrix
@@ -177,20 +176,25 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
 
 def reinit_sample_optimize(homan: HOForwarderV2Vis,
                            global_cam=None,
-                           lr=1e-2,
-                           num_epochs=50,
-                           num_iters=2000,
-                           temperature=100.,
-                           ratio=0.5,
-                           with_contact=True,
                            weights=None,
-                           vis_interval=-1,
                            save_grid: str = None,
-                           ):
+                           cfg = None):
     """
     Args:
         save_grid: str, fname to save the optimization process
+        cfg: cfg.optim in config/conf.yaml
     """
+    # Read out from config
+    lr = cfg.lr
+    num_epochs = cfg.num_epochs
+    num_iters = cfg.num_iters
+    temperature = cfg.temperature
+    ratio = cfg.ratio
+    vis_interval = cfg.vis_interval
+    l_mask_weight = cfg.loss.mask.weight
+    l_inside_weight = cfg.loss.inside.weight
+    l_close_weight = cfg.loss.close.weight
+
     ElementType = namedtuple("ElementType", "mask inside close R t s")
 
     weights = homan.rotations_hand.new_zeros([homan.bsize]) if weights is None else weights
@@ -210,7 +214,6 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
 
         sample_indices = choose_with_softmax(
             weights, temperature=temperature, ratio=ratio)
-        # print(f"Sample {sample_indices} at epoch {e}, weights = {weights.tolist()}")
 
         homan.set_obj_transform(
             translations[e], # homan.translations_object,
@@ -234,22 +237,23 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
 
                 l_obj_dict = homan.forward_obj_pose_render(
                     sample_indices=sample_indices)  # (B,N)
-                l_obj_mask = l_obj_dict['mask']
+                l_obj_mask = l_obj_dict['mask'].sum()
+
                 l_inside = homan.loss_insideness(
                     v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices)
                 l_inside = l_inside.sum()
+
                 l_close = homan.loss_closeness(
                     v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices,
-                    reduce_type='avg')
+                    num_priors=cfg.loss.close.num_priors,
+                    reduce_type=cfg.loss.close.reduce)
                 l_close = l_close.sum()
                 min_dist = homan.loss_nearest_dist(v_hand=v_hand, v_obj=v_obj).min()
 
                 # Accumulate
-                l_obj_mask = l_obj_mask.sum()
-                if with_contact:
-                    tot_loss = l_obj_mask  + l_inside + l_close*0.1
-                else:
-                    tot_loss = l_obj_mask
+                tot_loss = l_mask_weight * l_obj_mask +\
+                    l_inside_weight * l_inside +\
+                    l_close_weight * l_close
 
                 if save_grid and step % 5 == 0:
                     frame = homan.render_grid_np(0, True, sample_indices)
@@ -290,11 +294,6 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             [v*255 for v in out_frames], fps=15).write_videofile(save_grid)
 
     # write-back best
-    # Choose best
-    # final_score = \
-    #     torch.softmax(torch.as_tensor([-v.mask for v in results]), 0) + \
-    #     torch.softmax(torch.as_tensor([-v.inside for v in results]), 0) + \
-    #     torch.softmax(torch.as_tensor([-v.close for v in results]), 0)
     final_score = \
         torch.softmax(torch.as_tensor([-v.inside for v in results]), 0)
     idx = final_score.argmax()
@@ -305,4 +304,4 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
         rotations_object=R,
         scale_object=s)
 
-    return homan, weights, [list(v) for v in results]
+    return homan, weights, results

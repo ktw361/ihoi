@@ -1,5 +1,4 @@
-from enum import EnumMeta
-from re import I
+from hydra.utils import to_absolute_path
 from typing import Tuple, List
 from functools import reduce
 import torch
@@ -84,7 +83,8 @@ class HOForwarderV2(nn.Module):
         if mano_rot is None:
             mano_rot = torch.zeros([self.bsize, 3], device=mano_pca_pose.device)
 
-        self.mano_model = HomanManoModel("externals/mano", side=hand_side, pca_comps=45)  # Note(zhifan): in HOMAN num_pca = 16
+        self.mano_model = HomanManoModel(
+            to_absolute_path("externals/mano"), side=hand_side, pca_comps=45)  # Note(zhifan): in HOMAN num_pca = 16
         translation_init = translations_hand.detach().clone()
         self.translations_hand = nn.Parameter(translation_init,
                                               requires_grad=True)
@@ -297,7 +297,8 @@ class HOForwarderV2(nn.Module):
                 T_hand.unsqueeze(1),  # (B, 1, 3) -> (B, 1, 1, 3)
             ) # (B, N, 1, 3)
         return torch.matmul(
-            self.verts_object_og * scale, rots) + (scale * transl)
+            self.verts_object_og * scale, rots) + transl
+            # self.verts_object_og * scale, rots) + (scale * transl)
 
 
 class HOForwarderV2Impl(HOForwarderV2):

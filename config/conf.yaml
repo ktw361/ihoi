@@ -1,0 +1,37 @@
+description: ???
+
+# Running arguments
+index: ???
+save_video: False
+
+dataset:
+    image_sets: '/home/skynet/Zhifan/data/epic_analysis/gt_clips.json'
+    sample_frames: 30
+
+preprocess:
+    ihoi_box_expand: 0.3  # 1.0
+    ihoi_img_size: 224
+    rend_size: 256
+
+homan:
+    scale: 'depth'  # 'depth' / 'scalar' / 'xyz'
+
+optim:
+    loss:
+        mask:
+            weight: 1.0
+        inside:
+            weight: 1.0
+        close:
+            weight: 0.1
+            num_priors: 8
+            reduce: 'avg' # 'avg' / 'min'
+
+    lr: 1e-2
+    num_epochs: 40
+    num_iters: 50
+    temperature: 10
+    ratio: 0.75
+    vis_interval: 25  # 25
+
+    criteria: 'inside'

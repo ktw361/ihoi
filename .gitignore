@@ -11,8 +11,8 @@ __pycache__/
 *.xml
 *.fuse*
 CC/data
-output/
-output
+outputs/
+outputs
 externals/
 .env
 runs/

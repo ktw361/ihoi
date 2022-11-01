@@ -1,4 +1,5 @@
 import os
+from hydra.utils import to_absolute_path
 import torch
 import numpy as np
 import trimesh
@@ -23,18 +24,18 @@ class OBJLoader:
         bottle=0.2
     )
 
-    
-    def __init__(self, 
+
+    def __init__(self,
                  obj_models_root='./weights/obj_models',
                  load_simplified=True):
-        self.obj_models_root = obj_models_root
+        self.obj_models_root = to_absolute_path(obj_models_root)
         self.obj_models_cache = dict()
         self.load_simplified = load_simplified
 
     def load_obj_by_name(self, name, return_mesh=False):
-        """ 
+        """
         Args:
-            return_mesh: 
+            return_mesh:
                 if True, return a SimpleMesh object
 
         Returns:
@@ -54,11 +55,11 @@ class OBJLoader:
             verts = verts / np.linalg.norm(verts, 2, 1).max() * obj_scale / 2
             obj_mesh = MeshHolder(vertices=verts, faces=obj.faces)
             self.obj_models_cache[name] = obj_mesh
-        
+
         obj_mesh = self.obj_models_cache[name]
-        
+
         if return_mesh:
             obj_mesh = SimpleMesh(obj_mesh.vertices, obj_mesh.faces)
-        
+
         return obj_mesh
-            
+

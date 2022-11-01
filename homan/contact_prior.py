@@ -1,5 +1,6 @@
 from typing import NamedTuple, List
 from libzhifan import io
+from hydra.utils import to_absolute_path
 
 class ContactRegion(NamedTuple):
     """
@@ -14,5 +15,5 @@ class ContactRegion(NamedTuple):
 
 
 def get_contact_regions(path='weights/contact_regions.json'):
-    contact_regions = io.read_json(path)
+    contact_regions = io.read_json(to_absolute_path(path))
     return ContactRegion(**contact_regions)
