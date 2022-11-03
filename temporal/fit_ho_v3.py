@@ -136,6 +136,7 @@ def fit_scene(dataset,
         rotations_object=rotations,
         verts_object_og=vertices,
         faces_object=faces,
+        scale_mode=cfg.homan.scale_mode,
         scale_object=1.0)
     homan.set_obj_target(obj_mask_patch)
 

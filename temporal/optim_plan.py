@@ -210,7 +210,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
 
     results = []
 
-    for e in range(num_epochs):
+    for e in tqdm.trange(num_epochs, disable=not cfg.epoch_tqdm):
 
         sample_indices = choose_with_softmax(
             weights, temperature=temperature, ratio=ratio)
@@ -228,7 +228,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             'lr': lr
         }])
 
-        with tqdm.tqdm(total=num_iters) as loop:
+        with tqdm.tqdm(total=num_iters, disable=not cfg.iter_tqdm) as loop:
             for step in range(num_iters):
                 optimizer.zero_grad()
 

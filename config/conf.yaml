@@ -4,6 +4,10 @@ description: ???
 index: ???
 save_video: False
 
+hydra:
+    sweep:
+        dir: outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
 dataset:
     image_sets: '/home/skynet/Zhifan/data/epic_analysis/gt_clips.json'
     sample_frames: 30
@@ -14,7 +18,7 @@ preprocess:
     rend_size: 256
 
 homan:
-    scale: 'depth'  # 'depth' / 'scalar' / 'xyz'
+    scale_mode: ???  # Object scale mode: 'depth' / 'scalar' / 'xyz'
 
 optim:
     loss:
@@ -29,9 +33,11 @@ optim:
 
     lr: 1e-2
     num_epochs: 40
+    epoch_tqdm: True
     num_iters: 50
+    iter_tqdm: False
     temperature: 10
     ratio: 0.75
-    vis_interval: 25  # 25
+    vis_interval: -1  # 25
 
     criteria: 'inside'
