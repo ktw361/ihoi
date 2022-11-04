@@ -203,7 +203,8 @@ class HOForwarderV2(nn.Module):
         """ Translation is also a function of scale T(s) = s * T_init """
         self.scale_object = nn.Parameter(
             torch.as_tensor([scale_object],
-                            device=self.rotations_object.device),
+                            device=self.rotations_object.device,
+                            dtype=self.rotations_object.dtype),
             requires_grad=True)
 
     def set_obj_params(self,
@@ -211,14 +212,23 @@ class HOForwarderV2(nn.Module):
                        rotations_object,
                        verts_object_og,
                        faces_object,
-                       scale_object=1.0):
+                       scale_mode):
         """ Initialize object pamaters
 
         Args:
             obj_trans: (N, 3, 3)
+            scale_mode: str, one of {'depth', 'scalar', 'xyz'}
         """
         self.num_obj_init = len(rotations_object)
-        self.set_obj_transform(translations_object, rotations_object, scale_object)
+        self.scale_mode = scale_mode
+        if self.scale_mode == 'xyz':
+            scale_object = (1.0, 1.0, 1.0)
+        elif self.scale_mode == 'depth' or self.scale_mode == 'scalar':
+            scale_object = 1.0
+        else:
+            raise ValueError(f"Object scale_mode {scale_mode} not understood.")
+        self.set_obj_transform(
+            translations_object, rotations_object, scale_object)
         self.register_buffer("verts_object_og", verts_object_og)
         """ Do not attempt to copy tensor too early, which will get OOM. """
         self.register_buffer(
@@ -249,13 +259,17 @@ class HOForwarderV2(nn.Module):
         check_shape(self.keep_mask_object, mask_shape)
         check_shape(self.rotations_object, (num_init, 3, 2))
         check_shape(self.translations_object, (num_init, 1, 3))
-    
+        if self.scale_mode == 'xyz':
+            assert self.scale_object.size(-1) == 3
+        else:
+            assert self.scale_object.size(-1) == 1
+
     def _expand_obj_faces(self, *precedings) -> torch.Tensor:
         """
         Args:
-            *precedings: 
+            *precedings:
                 e.g. self._expand_obj_faces(b, n) -> shape (b, n, f, 3)
-        
+
         Returns:
             obj_faces: (*precedings, F_o, 3)
         """
@@ -296,9 +310,17 @@ class HOForwarderV2(nn.Module):
                 ),  # (B, N, 1, 3)
                 T_hand.unsqueeze(1),  # (B, 1, 3) -> (B, 1, 1, 3)
             ) # (B, N, 1, 3)
+        if self.scale_mode == 'depth':
+            transl = scale * transl
+        elif self.scale_mode == 'scalar':
+            transl = transl
+        elif self.scale_mode == 'xyz':
+            transl = transl
+        else:
+            raise ValueError("scale_mode not understood")
+
         return torch.matmul(
             self.verts_object_og * scale, rots) + transl
-            # self.verts_object_og * scale, rots) + (scale * transl)
 
 
 class HOForwarderV2Impl(HOForwarderV2):
@@ -645,7 +667,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         return l_contact['contact']
 
     def loss_collision(self, obj_idx=0, v_hand=None, v_obj=None, sample_indices=None):
-        """ 
+        """
         Returns:
             (B,)
         """
@@ -655,12 +677,12 @@ class HOForwarderV2Impl(HOForwarderV2):
             v_hand, v_obj[:, obj_idx], self._expand_obj_faces(self.bsize))
         l_collision = self.physical_factor(sample_indices=sample_indices) * l_collision
         return l_collision
-    
+
     """ Contact regions """
-    
+
     def get_distance_to_prior(self, obj_idx=0, v_hand=None, v_obj=None):
-        """ 
-        Returns: 
+        """
+        Returns:
             (B, 5+3)
             squared distance from prior regions to the object.
         """
@@ -678,8 +700,8 @@ class HOForwarderV2Impl(HOForwarderV2):
         return loss
 
     def get_normal_to_prior(self, obj_idx=0, v_hand=None, v_obj=None):
-        """ 
-        Returns: 
+        """
+        Returns:
             TODO
             squared distance from one tip to the object.
         """
@@ -691,7 +713,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         vn_obj = compute_vert_normals(v_obj[:, obj_idx], faces=self.faces_object)
         p2 = v_obj[:, obj_idx]
         loss = v_hand.new_zeros([len(v_hand)])
-        
+
         v1s, v2s, vn1s, vn2s = [], [], [], []
         for p in self.contact_regions.verts:
             p1 = v_hand[:, p, :]
@@ -716,7 +738,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         average over 8(=5+3) regions.
         Options:
             (5 regions vs 8 regions) x (min vs avg)
-        
+
         Args:
             squared_dist: whether to calc loss as squared distance
             num_priors: 5 or 8
@@ -755,7 +777,7 @@ class HOForwarderV2Impl(HOForwarderV2):
 
         loss *= self.physical_factor(sample_indices=sample_indices)
         return loss
-    
+
     def loss_insideness(self,
                         obj_idx=0, v_hand=None, v_obj=None,
                         squared_dist=False,
@@ -765,7 +787,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         For all p in object, find nearest K prior points,
             compute distance (inner product w/ normal) as loss at this p.
             negative indicate Wrong position.
-            
+
             Loss = \Avg -1.0 * max(loss_p, 0)
 
         Returns:
@@ -806,7 +828,7 @@ class HOForwarderV2Impl(HOForwarderV2):
                 trimesh.visual.interpolate(vals, color_map='jet'))
             mobj.visual.vertex_colors = colors
             return trimesh.Scene([mhand, mobj])
-            
+
         return loss
 
 
@@ -854,11 +876,11 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
                 mobj = SimpleMesh(
                     verts_obj, self.faces_object, tex_color=obj_color)
         return mhand, mobj
-    
-    def finger_with_normals(self, scene_idx, 
+
+    def finger_with_normals(self, scene_idx,
                             regions=(0,1,2,3,4,5,6,7)) -> trimesh.Scene:
-        """ 
-        Returns: a Scene with single hand, finger regions marked with normals. 
+        """
+        Returns: a Scene with single hand, finger regions marked with normals.
         """
         hand_color = 'light_blue'
         with torch.no_grad():
@@ -866,7 +888,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             vn = compute_vert_normals(verts_hand, self.faces_hand[scene_idx])
             mhand = SimpleMesh(
                 verts_hand, self.faces_hand[scene_idx], tex_color=hand_color)
-            
+
         paths = []
         for i, v_inds in enumerate(self.contact_regions.verts):
             if i not in regions:
@@ -882,12 +904,12 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
 
         return trimesh.Scene([mhand] + paths)
 
-    def visualize_nearest_normals(self, 
+    def visualize_nearest_normals(self,
                                   scene_idx,
                                   display=('hand', 'obj', 'normals'),
                                   regions=5,
                                   ) -> trimesh.Scene:
-        """ 
+        """
         Visualize each region's nearest point to the object
         """
         # Find nearest point indices
@@ -905,7 +927,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             mhand = SimpleMesh(v_hand[scene_idx], self.faces_hand[scene_idx])
             mobj = SimpleMesh(v_obj[scene_idx, obj_idx], self.faces_object)
             p2 = v_obj[:, obj_idx]
-            
+
             for part in self.contact_regions.verts[:regions]:
                 p1 = v_hand[:, part, :]
                 pn1 = vn_hand[:, part, :]
@@ -913,7 +935,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
                     p1, p2, k1=k1, k2=k2, pn1=pn1, pn2=vn_obj)
                 """
                 To get index in the hand,
-                first get index 
+                first get index
                 """
                 vh_ind = vh_ind[scene_idx].squeeze().item()
                 vh_ind = part[vh_ind]
@@ -932,10 +954,10 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
                 vec2 = trimesh.load_path(vec2.reshape(-1, 2, 3))
                 h_paths.append(vec1)
                 o_paths.append(vec2)
-            
+
             geo_vis.color_verts(mhand, vh_inds, (255, 0, 0))
             geo_vis.color_verts(mobj, vo_inds, (0, 0, 255))
-        
+
         scene_geoms = []
         if 'hand' in display:
             scene_geoms.append(mhand)
@@ -1067,7 +1089,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         )
         return np.hstack([front, left, back])
 
-    def render_grid_np(self, obj_idx=0, with_hand=True, 
+    def render_grid_np(self, obj_idx=0, with_hand=True,
                        sample_indices=None, *args, **kwargs) -> np.ndarray:
         """ low resolution but faster """
         l = self.bsize
@@ -1076,7 +1098,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         imgs = []
         for cam_idx in range(l):
             img = self.render_scene(
-                scene_idx=cam_idx, obj_idx=obj_idx, 
+                scene_idx=cam_idx, obj_idx=obj_idx,
                 with_hand=with_hand, *args, **kwargs)
             imgs.append(img)
             if cam_idx == l-1:
@@ -1114,6 +1136,10 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         l = self.bsize
         num_cols = 5
         num_rows = (l + num_cols - 1) // num_cols
+        # TODO(
+        # /home/skynet/Zhifan/ihoi/homan/ho_forwarder_v2.py:1128: RuntimeWarning: More than 20 figures have been opened. Figures created t
+        #  retained until explicitly closed and may consume too much memory. (To control this warning, see the rcParam `figure.max_open_warning`).
+        #    fig, axes = plt.subplots(
         fig, axes = plt.subplots(
             nrows=num_rows, ncols=num_cols,
             sharex=True, sharey=True, figsize=figsize)
@@ -1128,12 +1154,12 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         plt.tight_layout()
         return fig
 
-    def render_global(self, 
-                      global_cam: BatchCameraManager, 
-                      global_images: np.ndarray, 
-                      scene_idx: int, 
+    def render_global(self,
+                      global_cam: BatchCameraManager,
+                      global_images: np.ndarray,
+                      scene_idx: int,
                       obj_idx=0,
-                      with_hand=True, 
+                      with_hand=True,
                       overlay_gt=False,
                       ) -> np.ndarray:
         """ returns: (H, W, 3) """
