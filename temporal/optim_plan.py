@@ -215,10 +215,14 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
         sample_indices = choose_with_softmax(
             weights, temperature=temperature, ratio=ratio)
 
+        if homan.scale_mode == 'xyz':
+            obj_scale = homan.scale_object.squeeze().tolist()
+        else:
+            obj_scale = homan.translations_object.new_ones([1])
         homan.set_obj_transform(
             translations[e], # homan.translations_object,
-            rotations[e],
-            homan.translations_object.new_ones([1]))
+            rotations[e], obj_scale)
+        homan._check_shape_object(homan.num_obj_init)
         optimizer = torch.optim.Adam([{
             'params': [
                 homan.rotations_object,  # (1,)

@@ -198,7 +198,7 @@ class HOForwarderV2(nn.Module):
         self.rotations_object = nn.Parameter(
             rotations_object6d.detach().clone(), requires_grad=True)
         self.translations_object = nn.Parameter(
-            translations_object.detach().clone(),
+            translations_object.view(-1, 1, 3).detach().clone(),
             requires_grad=True)
         """ Translation is also a function of scale T(s) = s * T_init """
         self.scale_object = nn.Parameter(
