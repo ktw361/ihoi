@@ -4,6 +4,7 @@ import os
 import tqdm
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 from datasets.epic_clip import EpicClipDataset
 from homan.ho_forwarder_v2 import HOForwarderV2Vis
 from homan.utils.geometry import rot6d_to_matrix
@@ -144,11 +145,13 @@ def fit_scene(dataset,
     """
     save_grid = (fmt % 'optim.mp4') if cfg.save_video else None
     homan, _, results = reinit_sample_optimize(
-        homan, global_cam=K_global, 
+        homan, global_cam=K_global,
         save_grid=save_grid,
         cfg=cfg.optim)
 
-    homan.render_grid(obj_idx=0, with_hand=True, low_reso=False).savefig(fmt % 'optim.png')
+    fig = homan.render_grid(obj_idx=0, with_hand=True, low_reso=False)
+    fig.savefig(fmt % 'optim.png')
+    plt.close(fig)
     homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
     torch.save(homan, (fmt % 'model.pth'))
     torch.save([list(v) for v in results], (fmt % 'results.pth'))

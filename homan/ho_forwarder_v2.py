@@ -1136,10 +1136,6 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         l = self.bsize
         num_cols = 5
         num_rows = (l + num_cols - 1) // num_cols
-        # TODO(
-        # /home/skynet/Zhifan/ihoi/homan/ho_forwarder_v2.py:1128: RuntimeWarning: More than 20 figures have been opened. Figures created t
-        #  retained until explicitly closed and may consume too much memory. (To control this warning, see the rcParam `figure.max_open_warning`).
-        #    fig, axes = plt.subplots(
         fig, axes = plt.subplots(
             nrows=num_rows, ncols=num_cols,
             sharex=True, sharey=True, figsize=figsize)
