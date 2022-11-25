@@ -318,8 +318,15 @@ class HOForwarderV2(nn.Module):
         else:
             raise ValueError("scale_mode not understood")
 
-        return torch.matmul(
-            self.verts_object_og * scale, rots) + transl
+        verts_obj = self.verts_object_og.view(1, 1, -1, 3).expand(
+            self.bsize, self.num_obj_init, -1, -1)
+        if self.scale_mode == 'xyz':
+            scale = scale.view(1, -1, 1, 3).expand(
+                self.bsize, -1, -1, -1)
+        else:
+            scale = scale.view(1, -1, 1, 1).expand(
+                self.bsize, -1, -1, -1)
+        return torch.matmul(verts_obj * scale, rots) + transl
 
 
 class HOForwarderV2Impl(HOForwarderV2):
@@ -805,6 +812,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         p2 = v_hand[:, p2_idx, :]
         vn_hand_part = vn_hand[:, p2_idx, :]
 
+        print(p_obj.shape, p2.shape)
         _, idx, nn = knn_points(p_obj, p2, K=k2, return_nn=True)
         nn_normals = knn_gather(vn_hand_part, idx)
         p1 = p_obj.unsqueeze(2).expand(-1, -1, k2, -1)
