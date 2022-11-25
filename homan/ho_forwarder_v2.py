@@ -653,13 +653,17 @@ class HOForwarderV2Impl(HOForwarderV2):
         l_chamfer = (l_chamfer**2).sum()
         return l_chamfer
 
-    def loss_nearest_dist(self, obj_idx=0, v_hand=None, v_obj=None) -> torch.Tensor:
-        """ returns (B,) """
-        # TODO phy_factor
+    def loss_nearest_dist(self, v_hand=None, v_obj=None) -> torch.Tensor:
+        """ returns (B, N_obj) """
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
-        l_min_d = compute_nearest_dist(v_obj[:, obj_idx, ...], v_hand)
-        return l_min_d
+        v_hand_copied = v_hand.view(self.bsize, 1, -1, 3).expand(
+            -1, self.num_obj, -1, -1).reshape(self.bsize*self.num_obj, -1, 3)
+        v_obj = v_obj.view(self.bsize*self.num_obj, -1, 3)
+        l_min_d = compute_nearest_dist(v_obj, v_hand_copied)
+        l_min_d = l_min_d.view(self.bsize, self.num_obj)
+        phy_factor = self.physical_factor().view(-1, 1).expand(-1, self.num_obj)
+        return l_min_d * phy_factor
 
     def loss_contact(self, obj_idx=0, v_hand=None, v_obj=None):
         # TODO phy_factor
@@ -727,17 +731,15 @@ class HOForwarderV2Impl(HOForwarderV2):
 
         ph_copied = ph_copied.view(bsize*num_obj, -1, 1, 3).expand(-1, -1, k1, -1)
         prod = torch.sum((ph_copied - nn) * vn_obj_nn, dim=-1)  # (B*N, V_h, k1, 3) => (B*N, V_h, k1)
+        prod = prod**2 if squared_dist else prod.abs_()
         index = torch.cat(
             [prod.new_zeros(len(v), dtype=torch.long) + i
              for i, v in enumerate(self.contact_regions.verts)])
-        # index = index.view(-1, 1).expand(-1, k1)
-        print(prod.shape, index.shape)
-        regions_min, _ = scatter_min(src=prod, index=index, dim=1)  # (B, 8)
-        if squared_dist:
-            regions_min = regions_min**2
-        else:
-            regions_min = regions_min.abs_()
-        regions_min = regions_min[:, :num_priors]
+        
+        # Use mean for k1 nearest points
+        prod = prod.mean(-1)    # (B*N, V_h, k1) => (B*N, V_h)
+        regions_min, _ = scatter_min(src=prod, index=index, dim=1)  # (B*N, 8)
+        regions_min = regions_min[..., :num_priors]
 
         if reduce_type == 'min':
             loss = regions_min.min(dim=-1).values
@@ -745,9 +747,8 @@ class HOForwarderV2Impl(HOForwarderV2):
             loss = regions_min.mean(dim=-1)
 
         phy_factor = self.physical_factor(sample_indices=sample_indices)
-        phy_factor = phy_factor
-        print(loss.shape, phy_factor.shape)
-        loss = loss.view(bsize, num_obj, num_priors)
+        phy_factor = phy_factor.view(-1, 1).expand(-1, num_obj)
+        loss = loss.view(bsize, num_obj)
         loss = loss * phy_factor
         return loss
 
