@@ -137,7 +137,11 @@ class HOForwarderV2(nn.Module):
     def rot_mat_hand(self) -> torch.Tensor:
         return rot6d_to_matrix(self.rotations_hand)
 
-    def get_verts_hand(self, detach_scale=False) -> torch.Tensor:
+    def get_verts_hand(self, detach_scale=False, hand_space=False) -> torch.Tensor:
+        """
+        Args:
+            hand_space: if True, return hand vertices in hand space itself.
+        """
         all_hand_verts = []
         for hand_idx, side in enumerate(self.hand_sides):
             mano_pca_pose = self.mano_pca_pose[hand_idx::self.hand_nb]
@@ -152,10 +156,10 @@ class HOForwarderV2(nn.Module):
         all_hand_verts = torch.stack(all_hand_verts).transpose(
             0, 1).contiguous().view(-1, 778, 3)
         verts_hand_og = all_hand_verts + self.mano_trans.unsqueeze(1)
-        if detach_scale:
-            scale = self.scale_hand.detach()
-        else:
-            scale = self.scale_hand
+        if hand_space:
+            return verts_hand_og
+
+        scale = self.scale_hand.detach() if detach_scale else self.scale_hand
         rotations_hand = self.rot_mat_hand
 
         hand_proj_mode = 'persp'
@@ -202,9 +206,7 @@ class HOForwarderV2(nn.Module):
             requires_grad=True)
         """ Translation is also a function of scale T(s) = s * T_init """
         self.scale_object = nn.Parameter(
-            torch.as_tensor([scale_object],
-                            device=self.rotations_object.device,
-                            dtype=self.rotations_object.dtype),
+            scale_object.detach().clone(),
             requires_grad=True)
 
     def set_obj_params(self,
@@ -212,23 +214,20 @@ class HOForwarderV2(nn.Module):
                        rotations_object,
                        verts_object_og,
                        faces_object,
-                       scale_mode):
+                       scale_mode,
+                       scale_init):
         """ Initialize object pamaters
 
         Args:
             obj_trans: (N, 3, 3)
             scale_mode: str, one of {'depth', 'scalar', 'xyz'}
+                but use scale_init if provided.
+            scale_init: (N,) for scale_mode != 'xyz'
         """
         self.num_obj_init = len(rotations_object)
         self.scale_mode = scale_mode
-        if self.scale_mode == 'xyz':
-            scale_object = (1.0, 1.0, 1.0)
-        elif self.scale_mode == 'depth' or self.scale_mode == 'scalar':
-            scale_object = 1.0
-        else:
-            raise ValueError(f"Object scale_mode {scale_mode} not understood.")
         self.set_obj_transform(
-            translations_object, rotations_object, scale_object)
+            translations_object, rotations_object, scale_init)
         self.register_buffer("verts_object_og", verts_object_og)
         """ Do not attempt to copy tensor too early, which will get OOM. """
         self.register_buffer(
@@ -260,9 +259,9 @@ class HOForwarderV2(nn.Module):
         check_shape(self.rotations_object, (num_init, 3, 2))
         check_shape(self.translations_object, (num_init, 1, 3))
         if self.scale_mode == 'xyz':
-            assert self.scale_object.size(-1) == 3
+            check_shape(self.scale_object, (num_init, 3))
         else:
-            assert self.scale_object.size(-1) == 1
+            check_shape(self.scale_object, (num_init,))
 
     def _expand_obj_faces(self, *precedings) -> torch.Tensor:
         """
@@ -280,7 +279,7 @@ class HOForwarderV2(nn.Module):
     def rot_mat_obj(self) -> torch.Tensor:
         return rot6d_to_matrix(self.rotations_object)
 
-    def get_verts_object(self, cam_idx=None) -> torch.Tensor:
+    def get_verts_object(self, cam_idx=None, transl_gradient_only=False) -> torch.Tensor:
         """
             V_out = (V_model x R_o2h + T_o2h) x R_hand + T_hand
                   = V x (R_o2h x R_hand) + (T_o2h x R_hand + T_hand)

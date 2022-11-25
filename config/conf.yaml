@@ -19,6 +19,11 @@ preprocess:
 
 homan:
     scale_mode: ???  # Object scale mode: 'depth' / 'scalar' / 'xyz'
+    rot_init_method: 'spiral'       # 'random' / 'spiral'
+    transl_init_method: 'fingers'   # 'zero' / 'fingers' / 'mask'
+    scale_init_method: 'est'        # 'one' / 'xyz' / 'est'
+    rotation_regularization: False  # TODO
+    scale_regularization: False
 
 optim:
     loss:
@@ -28,7 +33,7 @@ optim:
             weight: 1.0
         close:
             weight: 0.1
-            num_priors: 8
+            num_priors: 5  # 5 for fingers, 8 for all regions
             reduce: 'avg' # 'avg' / 'min'
 
     lr: 1e-2

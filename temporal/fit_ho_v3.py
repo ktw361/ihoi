@@ -19,7 +19,7 @@ from obj_pose.obj_loader import OBJLoader
 from nnutils import image_utils
 from temporal.optim_plan import optimize_hand, smooth_hand_pose
 from temporal.optim_plan import reinit_sample_optimize
-from temporal.utils import init_6d_pose_from_bboxes
+from temporal.utils import init_6d_obj_pose_v2
 
 
 @hydra.main(config_path='../config', config_name='conf')
@@ -122,22 +122,27 @@ def fit_scene(dataset,
     obj_mesh = obj_loader.load_obj_by_name(cat, return_mesh=False)
     vertices = torch.as_tensor(obj_mesh.vertices, device='cuda')
     faces = torch.as_tensor(obj_mesh.faces, device='cuda')
-    num_initializations = 1
-    K_global = global_cam.get_K()
+    num_initializations = cfg.optim.num_epochs
 
-    device = 'cuda'
-    rotations, translations = init_6d_pose_from_bboxes(
-        obj_bboxes, vertices, cam_mat=K_global,
-        num_init=num_initializations,
-        base_rotation=rot6d_to_matrix(homan.rotations_hand),
-        base_translation=homan.translations_hand)
+    with torch.no_grad():
+        rotation_inits, translation_inits, scale_inits = init_6d_obj_pose_v2(
+            obj_bboxes, homan.get_verts_hand(), vertices,
+            global_cam_mat=global_cam.get_K(), local_cam_mat=ihoi_cam.get_K(),
+            num_init=num_initializations,
+            rot_init_method=cfg.homan.rot_init_method,
+            transl_init_method=cfg.homan.transl_init_method,
+            scale_init_method=cfg.homan.scale_init_method,
+            base_rotation=rot6d_to_matrix(homan.rotations_hand),
+            base_translation=homan.translations_hand,
+            homan=homan)
 
     homan.set_obj_params(
-        translations_object=translations,
-        rotations_object=rotations,
+        translations_object=translation_inits,
+        rotations_object=rotation_inits,
         verts_object_og=vertices,
         faces_object=faces,
-        scale_mode=cfg.homan.scale_mode)
+        scale_mode=cfg.homan.scale_mode,
+        scale_init=scale_inits)
     homan.set_obj_target(obj_mask_patch)
 
     """
@@ -145,7 +150,7 @@ def fit_scene(dataset,
     """
     save_grid = (fmt % 'optim.mp4') if cfg.save_video else None
     homan, _, results = reinit_sample_optimize(
-        homan, global_cam=K_global,
+        homan, rotation_inits, translation_inits, scale_inits,
         save_grid=save_grid,
         cfg=cfg.optim)
 

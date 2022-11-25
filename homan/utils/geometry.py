@@ -132,3 +132,57 @@ def compute_random_rotations(B=10, upright=False, device='cuda'):
         H = identity - 2 * v.unsqueeze(2) * v.unsqueeze(1)
         rotation_matrices = -torch.matmul(H, R)
     return rotation_matrices
+
+
+def grid_rotations_spiral(num_sphere_pts: int, num_xy_rots: int) -> torch.Tensor:
+    """ Deterministic algorithm.
+    
+    First distribute num_sphere_pts points, set z-axis of these points to the center;
+    Then from each point on the sphere, divide the xy rotation into num_xy_rots, i.e. each of 2*pi/num_xy_rots angles.
+    
+    [Spiral Ref]: http://extremelearning.com.au/how-to-evenly-distribute-points-on-a-sphere-more-effectively-than-the-canonical-fibonacci-lattice/
+    
+    Return: 
+        (num_sphere_pts * num_xy_rots, 3, 3) 
+    """
+    n = num_sphere_pts
+    if n >= 600000:
+        epsilon = 214
+    elif n>= 400000:
+        epsilon = 75
+    elif n>= 11000:
+        epsilon = 27
+    elif n>= 890:
+        epsilon = 10
+    elif n>= 177:
+        epsilon = 3.33
+    elif n>= 24:
+        epsilon = 1.33
+    else:
+        epsilon = 0.33
+
+    goldenRatio = (1 + 5**0.5)/2
+    i = torch.arange(0, n) 
+    theta = 2 * math.pi * i / goldenRatio
+    phi = torch.acos(1 - 2*(i+epsilon)/(n-1+2*epsilon))
+    x, y, z = torch.cos(theta) * torch.sin(phi), torch.sin(theta) * torch.sin(phi), torch.cos(phi)
+    z_vecs = torch.stack([x, y, z], 1)
+    
+    up_vecs = torch.zeros_like(z_vecs)
+    up_vecs[:, 1] = 1.0  # (x=0, y=1, z=0)
+    y_vecs = torch.nn.functional.normalize(torch.cross(z_vecs, up_vecs), p=2, dim=1)  # (num_sphere_pts, 3)
+    x_vecs = torch.nn.functional.normalize(torch.cross(y_vecs, z_vecs), p=2, dim=1)
+    Rz = torch.stack([x_vecs, y_vecs, z_vecs], dim=2)
+    
+    rads = 2*math.pi / num_xy_rots * torch.arange(num_xy_rots)
+    Rxy = torch.stack([
+        torch.stack([torch.cos(rads), torch.sin(rads), torch.zeros_like(rads)], 1),
+        torch.stack([-torch.sin(rads), torch.cos(rads), torch.zeros_like(rads)], 1),
+        torch.stack([torch.zeros_like(rads), torch.zeros_like(rads), torch.ones_like(rads)], 1),
+    ], 1)  # (num_xy_rots, 3, 3)
+    
+    num_rots = num_sphere_pts * num_xy_rots
+    Rxy = Rxy.unsqueeze(1).tile(1, num_sphere_pts, 1, 1).view(num_rots, 3, 3)
+    Rz = Rz.unsqueeze(0).tile(num_xy_rots, 1, 1, 1).view(num_rots, 3, 3)
+    rot_mats = Rz.matmul(Rxy)
+    return rot_mats

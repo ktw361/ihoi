@@ -5,7 +5,7 @@ import tqdm
 import torch
 from homan.ho_forwarder_v2 import HOForwarderV2Vis, HOForwarderV2Impl
 from homan.utils.geometry import rot6d_to_matrix
-from temporal.utils import choose_with_softmax, init_6d_pose_from_bboxes
+from temporal.utils import choose_with_softmax
 
 from moviepy import editor
 
@@ -175,10 +175,13 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
 
 
 def reinit_sample_optimize(homan: HOForwarderV2Vis,
-                           global_cam=None,
+                           rotation_inits,
+                           translation_inits,
+                           scale_inits,
                            weights=None,
                            save_grid: str = None,
-                           cfg = None):
+                           cfg = None,
+                           debug_no_reinit=False):
     """
     Args:
         save_grid: str, fname to save the optimization process
@@ -201,13 +204,6 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
     if save_grid:
         out_frames = []
 
-    rotations, translations = init_6d_pose_from_bboxes(
-        None, homan.get_verts_object()[0, 0], cam_mat=global_cam,
-        num_init=num_epochs,
-        base_rotation=rot6d_to_matrix(homan.rotations_hand),
-        base_translation=homan.translations_hand,
-        zero_init_transl=True)
-
     results = []
 
     for e in tqdm.trange(num_epochs, disable=not cfg.epoch_tqdm):
@@ -215,14 +211,13 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
         sample_indices = choose_with_softmax(
             weights, temperature=temperature, ratio=ratio)
 
-        if homan.scale_mode == 'xyz':
-            obj_scale = homan.scale_object.squeeze().tolist()
-        else:
-            obj_scale = homan.translations_object.new_ones([1])
-        homan.set_obj_transform(
-            translations[e], # homan.translations_object,
-            rotations[e], obj_scale)
-        homan._check_shape_object(homan.num_obj_init)
+        if not debug_no_reinit:
+            homan.set_obj_transform(
+                translation_inits[[e],...],
+                rotation_inits[[e],...],
+                scale_inits[[e],...])
+            homan._check_shape_object(1)
+
         optimizer = torch.optim.Adam([{
             'params': [
                 homan.rotations_object,  # (1,)
@@ -236,8 +231,9 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             for step in range(num_iters):
                 optimizer.zero_grad()
 
-                v_hand = homan.get_verts_hand()[sample_indices, ...]
-                v_obj = homan.get_verts_object()[sample_indices, ...]
+                with torch.no_grad():
+                    v_hand = homan.get_verts_hand()[sample_indices, ...]
+                v_obj = homan.get_verts_object(transl_gradient_only=False)[sample_indices, ...]
 
                 l_obj_dict = homan.forward_obj_pose_render(
                     sample_indices=sample_indices)  # (B,N)
@@ -303,9 +299,10 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
     idx = final_score.argmax()
     R, t, s = results[idx].R, results[idx].t, results[idx].s
 
-    homan.set_obj_transform(
-        translations_object=t,
-        rotations_object=R,
-        scale_object=s)
+    if not debug_no_reinit:
+        homan.set_obj_transform(
+            translations_object=t,
+            rotations_object=R,
+            scale_object=s)
 
     return homan, weights, results

@@ -1,8 +1,10 @@
+from functools import reduce
 from typing import Tuple
 import torch
 import numpy as np
 
-from homan.utils.geometry import compute_random_rotations
+from homan.ho_forwarder_v2 import HOForwarderV2Impl
+from homan.utils.geometry import compute_random_rotations, grid_rotations_spiral
 from homan.lib3d.optitrans import TCO_init_from_boxes_zup_autodepth
 
 from libzhifan.numeric import check_shape
@@ -76,9 +78,12 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
                         global_cam_mat: torch.Tensor,
                         local_cam_mat: torch.Tensor,
                         num_init: int,
+                        rot_init_method: str,
+                        transl_init_method: str,
+                        scale_init_method: str,
                         base_rotation=None,
                         base_translation=None,
-                        zero_init_transl=False):
+                        homan: HOForwarderV2Impl = None):
     """ Compute random rotation, then estimate scale, then estimate z/depth, then xy
     Args:
         bboxes: (T, 4) xywh, T stands for Time 
@@ -86,18 +91,31 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
         verts: (V, 3)
         global_cam_mat: (T, 3, 3) 
         local_cam_mat: (T, 3, 3) 
+        rot_init_method: one of {'random', 'spiral'}
+        transl_init_method: one of {'zero', 'fingers', 'mask'}
+        scale_init_method: one of {'one', 'xyz', 'est'}
+            if 'est', will estimate using bboxes and hand size.
+            note this assume homan.scale_mode != 'xyz'
         base_rotation: (T, 3, 3)
         base_translation: (T, 1, 3)
+        homan: if transl_init_method == 'fingers', homan will be called.
 
     Returns: 
     Transformation from object to *base*, not to camera.
         rotations: (num_init, 3, 3)
         translations: (num_init, 1, 3) identical for all num_inits
-        scale: (num_init, 1, 3) identical for all num_inits
+        scale: identical for all num_inits
+            (num_init, 3)   for 'xyz'
+            (num_init,)     otherwise
     """
     device = 'cuda'
     bsize = len(local_cam_mat)
-    rotations = compute_random_rotations(B=num_init, upright=False, device=device)
+    if rot_init_method == 'random':
+        rotations = compute_random_rotations(B=num_init, upright=False, device=device)
+    elif rot_init_method == 'spiral':
+        rotations = grid_rotations_spiral(num_sphere_pts=num_init, num_xy_rots=1)
+        rotations = rotations.to(device)
+        
     check_shape(local_cam_mat, (bsize, 3, 3))
     if base_rotation is not None:
         check_shape(base_rotation, (bsize, 3, 3))
@@ -118,29 +136,44 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
     V_rotated = torch.matmul(
         (verts_obj @ rotations).unsqueeze_(0),
         base_rotation.unsqueeze(1))  # (T, N_init, V, 3)
-    
-    scale_est = estimate_obj_scale(global_bboxes, verts_hand, V_rotated, local_cam_mat)
-    print(scale_est)
-    z_o2c = estimate_obj_depth(global_bboxes, V_rotated, local_cam_mat)  # (T, N_init), obj-to-cam
-    print(z_o2c)
-    x_o2c, y_o2c = estimate_obj_xy(global_bboxes, V_rotated, global_cam_mat, z_o2c)  # (T, N_init), obj-to-cam
-    est_translations = torch.cat([x_o2c, y_o2c, z_o2c], dim=-1).view(bsize, num_init, 1, 3)
-    
-    if zero_init_transl:
-        translations_init = rotations.new_zeros([num_init, 1, 3])
+
+    if scale_init_method == 'one':
+        scale_init = rotations.new_ones([num_init])
+    elif scale_init_method == 'xyz':
+        scale_init = rotations.new_ones([num_init, 3])
+    elif scale_init_method == 'est':
+        scale_init = estimate_obj_scale(global_bboxes, verts_hand, V_rotated, global_cam_mat)
+        V_rotated = V_rotated * scale_init.view(1, -1, 1, 1)
     else:
+        raise ValueError()
+
+    if transl_init_method == 'zero':
+        translations_init = rotations.new_zeros([num_init, 1, 3])
+    elif transl_init_method == 'fingers':
+        num_priors = 5
+        v_hand = homan.get_verts_hand(hand_space=True)
+        v_inds = reduce(lambda a, b: a + b, homan.contact_regions.verts[:num_priors], [])
+        finger_center = v_hand[:, v_inds, :]  # (T, 3)
+        translations_init = finger_center.mean(dim=(0, 1)).view(1, 1, 3).tile(num_init, 1, 1) 
+    elif transl_init_method == 'mask':
+        z_o2c = estimate_obj_depth(global_bboxes, V_rotated, local_cam_mat)  # (T, N_init), obj-to-cam
+        x_o2c, y_o2c = estimate_obj_xy(global_bboxes, V_rotated, global_cam_mat, z_o2c)  # (T, N_init), obj-to-cam
+        est_translations = torch.cat([x_o2c, y_o2c, z_o2c], dim=-1).view(bsize, num_init, 1, 3)
+
         translations_init = torch.einsum(
             'bnij,bkj->bnik', 
             est_translations - base_translation.unsqueeze(1), base_rotation)
         translations_init = translations_init.mean(dim=0)
+    else:
+        raise ValueError()
     
-    return rotations, translations_init, scale_est
+    return rotations, translations_init, scale_init
 
 
 def estimate_obj_scale(bboxes: torch.Tensor,
                        vh: torch.Tensor,
                        vo: torch.Tensor,
-                       local_cam_mat: torch.Tensor):
+                       global_cam_mat: torch.Tensor):
     """ Estimate scale of obj verts s.t.
         est_scale * Vo_3d / Vh_3d = box_diagonal / hand_proj_diagonal
 
@@ -153,39 +186,40 @@ def estimate_obj_scale(bboxes: torch.Tensor,
     Returns:
         estimated_scale: (N_init,)
     """
-    local_cam_mat = local_cam_mat.to(vo.device)
-    diag, max_ind = (bboxes[:, 2]**2 + bboxes[:, 3]**2).sqrt().max(dim=0)
-    print(diag)
+    global_cam_mat = global_cam_mat.to(vo.device)
+    bboxes = bboxes.to(vo.device)
+    diag = (bboxes[:, 2]**2 + bboxes[:, 3]**2).sqrt()  # (T,)
+    diag.unsqueeze_(1)
 
     # Get hand proj
-    vh_proj = vh[max_ind, :, :] @ local_cam_mat[max_ind, :, :].T  # (V, 3)
-    vh_proj /= vh_proj[:, [-1]]
-    vh_xmin = vh_proj[:, 0].min(dim=0).values
-    vh_xmax = vh_proj[:, 0].max(dim=0).values
-    vh_ymin = vh_proj[:, 1].min(dim=0).values
-    vh_ymax = vh_proj[:, 1].max(dim=0).values
+    vh_proj = torch.einsum(
+        'bvj,bij->bvi', vh, global_cam_mat)  # (T, V, 3)
+    vh_xmin = vh_proj[..., 0].min(dim=1).values  # (T, 3)
+    vh_xmax = vh_proj[..., 0].max(dim=1).values
+    vh_ymin = vh_proj[..., 1].min(dim=1).values
+    vh_ymax = vh_proj[..., 1].max(dim=1).values
     vh_diag = ((vh_xmax - vh_xmin)**2 + (vh_ymax - vh_ymin)**2).sqrt()
-    print(vh_diag)
+    vh_diag.unsqueeze_(1)
 
-    vh_xmin = vh[max_ind, :, 0].min(dim=0).values
-    vh_xmax = vh[max_ind, :, 0].max(dim=0).values
-    vh_ymin = vh[max_ind, :, 1].min(dim=0).values
-    vh_ymax = vh[max_ind, :, 1].max(dim=0).values
-    vh_zmin = vh[max_ind, :, 2].min(dim=0).values
-    vh_zmax = vh[max_ind, :, 2].max(dim=0).values
+    vh_xmin = vh[..., 0].min(dim=1).values  # (T, 3)
+    vh_xmax = vh[..., 0].max(dim=1).values
+    vh_ymin = vh[..., 1].min(dim=1).values
+    vh_ymax = vh[..., 1].max(dim=1).values
+    vh_zmin = vh[..., 2].min(dim=1).values
+    vh_zmax = vh[..., 2].max(dim=1).values
     vh_diameter = ((vh_xmax - vh_xmin)**2 + (vh_ymax - vh_ymin)**2 + (vh_zmax - vh_zmin)**2).sqrt()
-    print(vh_diameter)
+    vh_diameter.unsqueeze_(1)
 
-    vo_xmin = vo[max_ind, :, :, 0].min(dim=1).values
-    vo_xmax = vo[max_ind, :, :, 0].max(dim=1).values
-    vo_ymin = vo[max_ind, :, :, 0].min(dim=1).values
-    vo_ymax = vo[max_ind, :, :, 0].max(dim=1).values
-    vo_zmin = vo[max_ind, :, :, 0].min(dim=1).values
-    vo_zmax = vo[max_ind, :, :, 0].max(dim=1).values
+    vo_xmin = vo[..., 0].min(dim=2).values  # (T, N_init, 3)
+    vo_xmax = vo[..., 0].max(dim=2).values
+    vo_ymin = vo[..., 0].min(dim=2).values
+    vo_ymax = vo[..., 0].max(dim=2).values
+    vo_zmin = vo[..., 0].min(dim=2).values
+    vo_zmax = vo[..., 0].max(dim=2).values
     vo_diameter = ((vo_xmax - vo_xmin)**2 + (vo_ymax - vo_ymin)**2 + (vo_zmax - vo_zmin)**2).sqrt()
-    print(vo_diameter)
 
-    scale_est = diag / vh_diag * vh_diameter / vo_diameter
+    scale_est = (diag.log() - vh_diag.log() + vh_diameter.log() - vo_diameter.log()
+                 ).mean(dim=0).exp()
     return scale_est
 
 
