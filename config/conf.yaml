@@ -36,6 +36,7 @@ optim:
             weight: 0.1
             num_priors: 5  # 5 for fingers, 8 for all regions
             reduce: 'avg' # 'avg' / 'min'
+            num_nearst_points: 1    # For each p on hand, number of nearest points in obj
 
     lr: 1e-2
     num_epochs: 40

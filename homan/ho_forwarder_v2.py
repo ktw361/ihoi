@@ -436,7 +436,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         Renders objects according to current rotation and translation.
 
         Returns:
-            images: ndarray (B, N_init, W, W)
+            images: ndarray (B, N_obj, W, W)
         """
         if verts is None:
             verts = self.get_verts_object()  # (B, N, V, 3)
@@ -686,58 +686,12 @@ class HOForwarderV2Impl(HOForwarderV2):
 
     """ Contact regions """
 
-    def get_distance_to_prior(self, obj_idx=0, v_hand=None, v_obj=None):
-        """
-        Returns:
-            (B, 5+3)
-            squared distance from prior regions to the object.
-        """
-        raise ValueError("Use loss_closesness")
-        k1, k2 = 1, 1
-        v_hand = self.get_verts_hand() if v_hand is None else v_hand
-        v_obj = self.get_verts_object() if v_obj is None else v_obj
-
-        p2 = v_obj[:, obj_idx]
-        loss = v_hand.new_zeros([v_hand.size(0), 8])
-        for i, p in enumerate(self.contact_regions.verts):
-            p1 = v_hand[:, p, :]
-            l = compute_nearest_dist(p1, p2, k1=k1, k2=k2, ret_index=False)
-            loss[:, i] = l
-        return loss
-
-    def get_normal_to_prior(self, obj_idx=0, v_hand=None, v_obj=None):
-        """
-        Returns:
-            TODO
-            squared distance from one tip to the object.
-        """
-        raise NotImplementedError
-        k1, k2 = 1, 1
-        v_hand = self.get_verts_hand() if v_hand is None else v_hand
-        v_obj = self.get_verts_object() if v_obj is None else v_obj
-        vn_hand = compute_vert_normals(v_hand, faces=self.faces_hand[0])
-        vn_obj = compute_vert_normals(v_obj[:, obj_idx], faces=self.faces_object)
-        p2 = v_obj[:, obj_idx]
-        loss = v_hand.new_zeros([len(v_hand)])
-
-        v1s, v2s, vn1s, vn2s = [], [], [], []
-        for p in self.contact_regions.verts:
-            p1 = v_hand[:, p, :]
-            l, i1, i2 = compute_nearest_dist(
-                p1, p2, k1=k1, k2=k2, ret_index=True)
-            v1, v2, _, _, vn1, vn2 = find_nearest_vecs(
-                p1, p2, k1=k1, k2=k2, pn1=vn_hand, pn2=vn_obj)
-            v2 = v2.squeeze_()  # (B, 3)
-            vn2 = vn2.squeeze_()  # (B, 3)
-
-            print(v2.shape)
-            loss += l
-        return loss
-
     def loss_closeness(self,
-                       obj_idx=0, v_hand=None, v_obj=None,
+                       v_hand=None, v_obj=None,
                        squared_dist=False,
-                       num_priors=8, reduce_type='avg',
+                       num_priors=8, 
+                       reduce_type='avg',
+                       num_nearest_points=1,
                        sample_indices=None):
         """
         L = distance from finger tips to their nearest vertices
@@ -751,37 +705,50 @@ class HOForwarderV2Impl(HOForwarderV2):
             reduce: 'min' or 'avg'
 
         Returns:
-            loss: (B,)
+            loss: (B, N_obj)
         """
+        k1 = num_nearest_points
         if sample_indices is None:
             sample_indices = np.arange(self.bsize)
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
-        v_obj = v_obj[:, obj_idx]
+
+        bsize, num_obj, obj_size = self.bsize, self.num_obj, v_obj.size(-2)
+        v_obj = v_obj.view(bsize * num_obj, obj_size, 3)  # (B*N, V, 3)
         vn_obj = compute_vert_normals(v_obj, faces=self.faces_object)
 
         ph_idx = reduce(lambda a, b: a + b, self.contact_regions.verts, [])
         ph = v_hand[:, ph_idx, :]
-        _, idx, nn = knn_points(ph, v_obj, K=1, return_nn=True)
-        nn = nn.squeeze_(2)
-        vn_obj_nn = knn_gather(vn_obj, idx).squeeze_(2)
+        ph_copied = ph.unsqueeze(1).expand(-1, num_obj, -1, -1).reshape(
+            bsize * num_obj, -1, 3)  # (B*N, Vh, 3)
+        _, idx, nn = knn_points(ph_copied, v_obj, K=k1, return_nn=True)
+        # idx: (B*N, CONTACT, k1),  nn: (B*N, CONTACT, k1, 3)
+        vn_obj_nn = knn_gather(vn_obj, idx)  # (B*N, V, k1, 3)
 
-        prod = torch.sum((ph - nn) * vn_obj_nn, dim=-1)  # (B, V_h)
+        ph_copied = ph_copied.view(bsize*num_obj, -1, 1, 3).expand(-1, -1, k1, -1)
+        prod = torch.sum((ph_copied - nn) * vn_obj_nn, dim=-1)  # (B*N, V_h, k1, 3) => (B*N, V_h, k1)
         index = torch.cat(
             [prod.new_zeros(len(v), dtype=torch.long) + i
              for i, v in enumerate(self.contact_regions.verts)])
+        # index = index.view(-1, 1).expand(-1, k1)
+        print(prod.shape, index.shape)
         regions_min, _ = scatter_min(src=prod, index=index, dim=1)  # (B, 8)
         if squared_dist:
             regions_min = regions_min**2
         else:
             regions_min = regions_min.abs_()
         regions_min = regions_min[:, :num_priors]
+
         if reduce_type == 'min':
             loss = regions_min.min(dim=-1).values
         elif reduce_type == 'avg':
             loss = regions_min.mean(dim=-1)
 
-        loss *= self.physical_factor(sample_indices=sample_indices)
+        phy_factor = self.physical_factor(sample_indices=sample_indices)
+        phy_factor = phy_factor
+        print(loss.shape, phy_factor.shape)
+        loss = loss.view(bsize, num_obj, num_priors)
+        loss = loss * phy_factor
         return loss
 
     def loss_insideness(self,
@@ -801,7 +768,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             num_nearest_points: number of nearest K points in hand
 
         Returns:
-            loss: (B, N_init, V)
+            loss: (B, N_obj, V)
         """
         k2 = num_nearest_points
         if sample_indices is None:

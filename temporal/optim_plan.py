@@ -247,7 +247,8 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                 l_close = homan.loss_closeness(
                     v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices,
                     num_priors=cfg.loss.close.num_priors,
-                    reduce_type=cfg.loss.close.reduce)
+                    reduce_type=cfg.loss.close.reduce,
+                    num_nearest_points=cfg.loss.close.num_nearest_points)
                 l_close = l_close.sum()
                 min_dist = homan.loss_nearest_dist(v_hand=v_hand, v_obj=v_obj).min()
 
