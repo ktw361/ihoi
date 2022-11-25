@@ -224,7 +224,7 @@ class HOForwarderV2(nn.Module):
                 but use scale_init if provided.
             scale_init: (N,) for scale_mode != 'xyz'
         """
-        self.num_obj_init = len(rotations_object)
+        self.num_obj = len(rotations_object)
         self.scale_mode = scale_mode
         self.set_obj_transform(
             translations_object, rotations_object, scale_init)
@@ -248,7 +248,7 @@ class HOForwarderV2(nn.Module):
                              (target_masks_object >= 0).float())
         # edge loss is not used
         self.cuda()
-        self._check_shape_object(self.num_obj_init)
+        self._check_shape_object(self.num_obj)
 
     def _check_shape_object(self, num_init):
         check_shape(self.verts_object_og, (-1, 3))
@@ -319,7 +319,7 @@ class HOForwarderV2(nn.Module):
             raise ValueError("scale_mode not understood")
 
         verts_obj = self.verts_object_og.view(1, 1, -1, 3).expand(
-            self.bsize, self.num_obj_init, -1, -1)
+            self.bsize, self.num_obj, -1, -1)
         if self.scale_mode == 'xyz':
             scale = scale.view(1, -1, 1, 3).expand(
                 self.bsize, -1, -1, -1)
@@ -463,7 +463,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         """  For find_optimal_obj_pose()
         returns: (N,)
         """
-        _, n, w = self.bsize, self.num_obj_init, self.mask_size
+        _, n, w = self.bsize, self.num_obj, self.mask_size
         verts = self.get_verts_object(frame_idx)
         image = self.render_obj(verts, cam_idx=frame_idx)  # (1, N, W, W)
         image = image * self.keep_mask_object[[frame_idx], None]
@@ -509,7 +509,7 @@ class HOForwarderV2Impl(HOForwarderV2):
                 - mask: (B, N)
                 - offscreen: (B, N)
         """
-        b, n, w = self.bsize, self.num_obj_init, self.mask_size
+        b, n, w = self.bsize, self.num_obj, self.mask_size
         if sample_indices is None:
             sample_indices = np.arange(self.bsize)
 
@@ -616,7 +616,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         loss = d_pixel**2
 
         Returns:
-            factor : (B,), same length as sample_indces
+            factor : (B,) same length as sample_indces
         """
         sample_indices = np.arange(self.bsize) if sample_indices is None else sample_indices
         fx = self.camintr[sample_indices, 0, 0]
@@ -785,48 +785,58 @@ class HOForwarderV2Impl(HOForwarderV2):
         return loss
 
     def loss_insideness(self,
-                        obj_idx=0, v_hand=None, v_obj=None,
+                        v_hand=None, v_obj=None,
                         squared_dist=False,
                         sample_indices=None,
+                        num_nearest_points=3,
                         debug_viz=False):
         """
-        For all p in object, find nearest K prior points,
+        For all p in object, find nearest K points in hand prior regions,
             compute distance (inner product w/ normal) as loss at this p.
             negative indicate Wrong position.
 
             Loss = \Avg -1.0 * max(loss_p, 0)
+        
+        Args:
+            num_nearest_points: number of nearest K points in hand
 
         Returns:
-            loss: (B, V)
+            loss: (B, N_init, V)
         """
-        k2 = 3
+        k2 = num_nearest_points
         if sample_indices is None:
             sample_indices = np.arange(self.bsize)
 
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         vn_hand = compute_vert_normals(v_hand, faces=self.faces_hand[0])
         v_obj = self.get_verts_object() if v_obj is None else v_obj
-        p_obj = v_obj[:, obj_idx]
+        v_obj_size = v_obj.size(-2)
+        p_obj = v_obj.view(self.bsize, self.num_obj * v_obj_size, 3)  # 
 
         p2_idx = reduce(lambda a, b: a + b, self.contact_regions.verts, [])
         p2 = v_hand[:, p2_idx, :]
-        vn_hand_part = vn_hand[:, p2_idx, :]
+        vn_hand_part = vn_hand[:, p2_idx, :]  # (B, CONTACT, 3)
 
-        print(p_obj.shape, p2.shape)
-        _, idx, nn = knn_points(p_obj, p2, K=k2, return_nn=True)
-        nn_normals = knn_gather(vn_hand_part, idx)
-        p1 = p_obj.unsqueeze(2).expand(-1, -1, k2, -1)
+        _, idx, nn = knn_points(p_obj, p2, K=k2, return_nn=True)  # idx: (B, N*V, k2), nn: (B, N*V, k2, 3)
+        nn_normals = knn_gather(vn_hand_part, idx)  # (B, N*V, k2, 3)
 
-        vec = (p1 - nn)  # (B, V, k2, 3)
-        prod = (vec * nn_normals).sum(-1)  # (B, V, k2)
+        """ Reshaping """
+        p1 = p_obj.view(self.bsize, self.num_obj, v_obj_size, 1, 3).expand(-1, -1, -1, k2, -1)
+        nn_normals = nn_normals.view(self.bsize, self.num_obj, v_obj_size, k2, 3)
+        nn = nn.view(self.bsize, self.num_obj, v_obj_size, k2, 3)
+
+        vec = (p1 - nn)  # (B, N, V, k2, 3)
+        prod = (vec * nn_normals).sum(-1)  # (B, N, V, k2)
         if squared_dist:
             prod = prod**2
-        score  = prod.mean(-1)  # (B, V)
-        loss =  (- score.clamp_max_(0)).mean(-1)
-        loss *= self.physical_factor(sample_indices)
+        score  = prod.mean(-1)  # (B, N, V)
+        loss =  (- score.clamp_max_(0)).mean(-1)  # (B, N)
+        phy_factor = self.physical_factor(sample_indices).view(self.bsize, 1)
+        loss = loss * phy_factor
 
         if debug_viz:
             scene = 0
+            obj_idx = 0
             vals = score[scene].detach().cpu().numpy()
             mhand, mobj = self.get_meshes(scene, obj_idx)
             colors = np.where(

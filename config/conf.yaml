@@ -31,6 +31,7 @@ optim:
             weight: 1.0
         inside:
             weight: 1.0
+            num_nearst_points: 3    # For each p on obj, number of nearest points in hand
         close:
             weight: 0.1
             num_priors: 5  # 5 for fingers, 8 for all regions

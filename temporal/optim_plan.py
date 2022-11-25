@@ -240,7 +240,8 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                 l_obj_mask = l_obj_dict['mask'].sum()
 
                 l_inside = homan.loss_insideness(
-                    v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices)
+                    v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices,
+                    num_nearest_points=cfg.loss.inside.num_nearest_points)
                 l_inside = l_inside.sum()
 
                 l_close = homan.loss_closeness(
