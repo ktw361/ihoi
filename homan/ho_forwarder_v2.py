@@ -195,6 +195,7 @@ class HOForwarderV2(nn.Module):
         Args:
             obj_trans: (N, 3, 3)
         """
+        self.num_obj = len(rotations_object)
         if rotations_object.shape[-1] == 3:
                 rotations_object6d = matrix_to_rot6d(rotations_object)
         else:
@@ -224,7 +225,6 @@ class HOForwarderV2(nn.Module):
                 but use scale_init if provided.
             scale_init: (N,) for scale_mode != 'xyz'
         """
-        self.num_obj = len(rotations_object)
         self.scale_mode = scale_mode
         self.set_obj_transform(
             translations_object, rotations_object, scale_init)
@@ -653,16 +653,19 @@ class HOForwarderV2Impl(HOForwarderV2):
         l_chamfer = (l_chamfer**2).sum()
         return l_chamfer
 
-    def loss_nearest_dist(self, v_hand=None, v_obj=None) -> torch.Tensor:
+    def loss_nearest_dist(self, v_hand=None, v_obj=None, sample_indices=None) -> torch.Tensor:
         """ returns (B, N_obj) """
+        if sample_indices is None:
+            sample_indices = np.arange(self.bsize)
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
-        v_hand_copied = v_hand.view(self.bsize, 1, -1, 3).expand(
-            -1, self.num_obj, -1, -1).reshape(self.bsize*self.num_obj, -1, 3)
-        v_obj = v_obj.view(self.bsize*self.num_obj, -1, 3)
+        bsize, num_obj = v_hand.size(0), v_obj.size(1)
+        v_hand_copied = v_hand.view(bsize, 1, -1, 3).expand(
+            -1, self.num_obj, -1, -1).reshape(bsize*num_obj, -1, 3)
+        v_obj = v_obj.view(bsize*num_obj, -1, 3)
         l_min_d = compute_nearest_dist(v_obj, v_hand_copied)
-        l_min_d = l_min_d.view(self.bsize, self.num_obj)
-        phy_factor = self.physical_factor().view(-1, 1).expand(-1, self.num_obj)
+        l_min_d = l_min_d.view(bsize, num_obj)
+        phy_factor = self.physical_factor(sample_indices).view(-1, 1).expand(-1, num_obj)
         return l_min_d * phy_factor
 
     def loss_contact(self, obj_idx=0, v_hand=None, v_obj=None):
@@ -717,7 +720,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
 
-        bsize, num_obj, obj_size = self.bsize, self.num_obj, v_obj.size(-2)
+        bsize, num_obj, obj_size = v_hand.size(0), v_obj.size(1), v_obj.size(-2)
         v_obj = v_obj.view(bsize * num_obj, obj_size, 3)  # (B*N, V, 3)
         vn_obj = compute_vert_normals(v_obj, faces=self.faces_object)
 
@@ -778,8 +781,9 @@ class HOForwarderV2Impl(HOForwarderV2):
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         vn_hand = compute_vert_normals(v_hand, faces=self.faces_hand[0])
         v_obj = self.get_verts_object() if v_obj is None else v_obj
-        v_obj_size = v_obj.size(-2)
-        p_obj = v_obj.view(self.bsize, self.num_obj * v_obj_size, 3)  # 
+
+        bsize, num_obj, v_obj_size = v_hand.size(0), v_obj.size(1), v_obj.size(-2)
+        p_obj = v_obj.view(bsize, num_obj * v_obj_size, 3)  # 
 
         p2_idx = reduce(lambda a, b: a + b, self.contact_regions.verts, [])
         p2 = v_hand[:, p2_idx, :]
@@ -789,9 +793,9 @@ class HOForwarderV2Impl(HOForwarderV2):
         nn_normals = knn_gather(vn_hand_part, idx)  # (B, N*V, k2, 3)
 
         """ Reshaping """
-        p1 = p_obj.view(self.bsize, self.num_obj, v_obj_size, 1, 3).expand(-1, -1, -1, k2, -1)
-        nn_normals = nn_normals.view(self.bsize, self.num_obj, v_obj_size, k2, 3)
-        nn = nn.view(self.bsize, self.num_obj, v_obj_size, k2, 3)
+        p1 = p_obj.view(bsize, num_obj, v_obj_size, 1, 3).expand(-1, -1, -1, k2, -1)
+        nn_normals = nn_normals.view(bsize, num_obj, v_obj_size, k2, 3)
+        nn = nn.view(bsize, num_obj, v_obj_size, k2, 3)
 
         vec = (p1 - nn)  # (B, N, V, k2, 3)
         prod = (vec * nn_normals).sum(-1)  # (B, N, V, k2)
@@ -799,7 +803,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             prod = prod**2
         score  = prod.mean(-1)  # (B, N, V)
         loss =  (- score.clamp_max_(0)).mean(-1)  # (B, N)
-        phy_factor = self.physical_factor(sample_indices).view(self.bsize, 1)
+        phy_factor = self.physical_factor(sample_indices).view(bsize, 1)
         loss = loss * phy_factor
 
         if debug_viz:

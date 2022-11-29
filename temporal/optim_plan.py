@@ -190,6 +190,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
     # Read out from config
     lr = cfg.lr
     num_epochs = cfg.num_epochs
+    num_obj = cfg.num_obj_parallel
     num_iters = cfg.num_iters
     temperature = cfg.temperature
     ratio = cfg.ratio
@@ -200,7 +201,8 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
 
     ElementType = namedtuple("ElementType", "mask inside close R t s")
 
-    weights = homan.rotations_hand.new_zeros([homan.bsize]) if weights is None else weights
+    weights = homan.rotations_hand.new_zeros([homan.bsize]) \
+        if weights is None else weights
     if save_grid:
         out_frames = []
 
@@ -216,7 +218,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                 translation_inits[[e],...],
                 rotation_inits[[e],...],
                 scale_inits[[e],...])
-            homan._check_shape_object(1)
+            homan._check_shape_object(homan.num_obj)
 
         optimizer = torch.optim.Adam([{
             'params': [
@@ -233,7 +235,8 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
 
                 with torch.no_grad():
                     v_hand = homan.get_verts_hand()[sample_indices, ...]
-                v_obj = homan.get_verts_object(transl_gradient_only=False)[sample_indices, ...]
+                v_obj = homan.get_verts_object(
+                    transl_gradient_only=False)[sample_indices, ...]
 
                 l_obj_dict = homan.forward_obj_pose_render(
                     sample_indices=sample_indices)  # (B,N)
@@ -250,7 +253,8 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                     reduce_type=cfg.loss.close.reduce,
                     num_nearest_points=cfg.loss.close.num_nearest_points)
                 l_close = l_close.sum()
-                min_dist = homan.loss_nearest_dist(v_hand=v_hand, v_obj=v_obj).min()
+                min_dist = homan.loss_nearest_dist(
+                    v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices).min()
 
                 # Accumulate
                 tot_loss = l_mask_weight * l_obj_mask +\
