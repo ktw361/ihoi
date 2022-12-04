@@ -194,9 +194,6 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
     temperature = cfg.temperature
     ratio = cfg.ratio
     vis_interval = cfg.vis_interval
-    l_mask_weight = cfg.loss.mask.weight
-    l_inside_weight = cfg.loss.inside.weight
-    l_close_weight = cfg.loss.close.weight
 
     ElementType = namedtuple("ElementType", "mask inside close R t s")
 
@@ -207,15 +204,16 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
 
     results = []
 
-    for e in tqdm.trange(num_epochs, disable=not cfg.epoch_tqdm):
+    for e in tqdm.trange(num_epochs // num_epoch_parallel, disable=not cfg.epoch_tqdm):
 
-        sample_indices = choose_with_softmax(
-            weights, temperature=temperature, ratio=ratio)
+        homan.sample_indices = choose_with_softmax(
+            weights, temperature=temperature, ratio=ratio)  # same for all num_epoch_parallel
 
+        transform_indices = torch.arange(e*num_epoch_parallel, (e+1)*num_epoch_parallel)
         homan.set_obj_transform(
-            translation_inits[[e],...],
-            rotation_inits[[e],...],
-            scale_inits[[e],...])
+            translation_inits[transform_indices,...],
+            rotation_inits[transform_indices,...],
+            scale_inits[transform_indices,...])
         homan._check_shape_object(homan.num_obj)
 
         optimizer = torch.optim.Adam([{
@@ -231,45 +229,13 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             for step in range(num_iters):
                 optimizer.zero_grad()
 
-                with torch.no_grad():
-                    v_hand = homan.get_verts_hand()[sample_indices, ...]
-                v_obj = homan.get_verts_object(
-                    transl_gradient_only=False)[sample_indices, ...]
-
-                l_obj_dict = homan.forward_obj_pose_render(
-                    sample_indices=sample_indices)  # (B,N)
-                l_obj_mask = l_obj_dict['mask'].sum()
-
-                l_inside = homan.loss_insideness(
-                    v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices,
-                    num_nearest_points=cfg.loss.inside.num_nearest_points)
-                l_inside = l_inside.sum()
-
-                l_close = homan.loss_closeness(
-                    v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices,
-                    num_priors=cfg.loss.close.num_priors,
-                    reduce_type=cfg.loss.close.reduce,
-                    num_nearest_points=cfg.loss.close.num_nearest_points)
-                l_close = l_close.sum()
-                min_dist = homan.loss_nearest_dist(
-                    v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices).min()
-
-                # Accumulate
-                tot_loss = l_mask_weight * l_obj_mask +\
-                    l_inside_weight * l_inside +\
-                    l_close_weight * l_close
+                print_metric = (vis_interval > 0 and step % vis_interval == 0)
+                tot_loss = homan.train_loss(
+                    cfg=cfg, print_metric=print_metric)
 
                 if save_grid and step % 5 == 0:
-                    frame = homan.render_grid_np(0, True, sample_indices)
+                    frame = homan.render_grid_np(0, True)
                     out_frames.append(frame)
-
-                if vis_interval > 0 and step % vis_interval == 0:
-                    print(
-                        f"obj_mask:{l_obj_mask.item():.3f} "
-                        f"inside:{l_inside.item():.3f} "
-                        f"close:{l_close.item():.3f} "
-                        f"min_dist: {min_dist:.3f} "
-                        )
 
                 tot_loss.backward()
                 optimizer.step()
@@ -277,12 +243,14 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                 loop.update()
 
         with torch.no_grad():
-            mask_score = homan.forward_obj_pose_render(
-                sample_indices=sample_indices)['mask'].sum()
+            v_hand = homan.get_verts_hand()[homan.sample_indices, ...]
+            v_obj = homan.get_verts_object(
+                transl_gradient_only=False)[homan.sample_indices, ...]
+            mask_score = homan.forward_obj_pose_render()['mask'].sum()
             inside_score = homan.loss_insideness(
-                v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices).sum()
+                v_hand=v_hand, v_obj=v_obj).sum()
             close_score = homan.loss_closeness(
-                v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices).sum()
+                v_hand=v_hand, v_obj=v_obj).sum()
             R = homan.rotations_object.detach().clone()
             t = homan.translations_object.detach().clone()
             s = homan.scale_object.detach().clone()
@@ -291,7 +259,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                 R, t, s)
             results.append(element)
         # Update weights
-        weights[sample_indices] -= tot_loss
+        weights[homan.sample_indices] -= tot_loss
 
     if save_grid:
         editor.ImageSequenceClip(

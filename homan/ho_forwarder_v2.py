@@ -332,6 +332,17 @@ class HOForwarderV2(nn.Module):
 class HOForwarderV2Impl(HOForwarderV2):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._sample_indices = None
+
+    @property
+    def sample_indices(self):
+        if self._sample_indices is None:
+            return np.arange(self.bsize)
+        return self._sample_indices
+
+    @sample_indices.setter
+    def sample_indices(self, value):
+        self._sample_indices = value
 
     def loss_sil_hand(self, compute_iou=False, func='iou'):
         """ returns: (B,) """
@@ -431,7 +442,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         diff = (dist**2).abs_()
         return diff
 
-    def render_obj(self, verts=None, sample_indices=None) -> torch.Tensor:
+    def render_obj(self, verts=None) -> torch.Tensor:
         """
         Renders objects according to current rotation and translation.
 
@@ -444,9 +455,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         n = verts.size(1)
         batch_faces = self._expand_obj_faces(b, n)
         batch_K = self.camintr.unsqueeze(1).expand(self.bsize, n, 3, 3)  # (B, 3, 3) -> (B, N, 3, 3)
-        if sample_indices is None:
-            sample_indices = np.arange(self.bsize)
-        batch_K = batch_K[sample_indices, ...]
+        batch_K = batch_K[self.sample_indices, ...]
 
         images = self.renderer(
             verts.view(b*n, -1, 3),
@@ -463,6 +472,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         """  For find_optimal_obj_pose()
         returns: (N,)
         """
+        raise DeprecationWarning
         _, n, w = self.bsize, self.num_obj, self.mask_size
         verts = self.get_verts_object(frame_idx)
         image = self.render_obj(verts, cam_idx=frame_idx)  # (1, N, W, W)
@@ -496,9 +506,9 @@ class HOForwarderV2Impl(HOForwarderV2):
         return loss_dict
 
     def forward_obj_pose_render(self,
+                                v_obj=None,
                                 loss_only=True,
-                                func='l2_iou',
-                                sample_indices=None) -> dict:
+                                func='l2_iou') -> dict:
         """ Reimplement the PoseRenderer.foward()
 
         Args:
@@ -509,12 +519,12 @@ class HOForwarderV2Impl(HOForwarderV2):
                 - mask: (B, N)
                 - offscreen: (B, N)
         """
-        b, n, w = self.bsize, self.num_obj, self.mask_size
-        if sample_indices is None:
-            sample_indices = np.arange(self.bsize)
+        sample_indices = self.sample_indices
+        if v_obj is None:
+            v_obj = self.get_verts_object()[sample_indices, ...]
+        b, n, w = v_obj.size(0), self.num_obj, self.mask_size
 
-        v_obj = self.get_verts_object()[sample_indices, ...]
-        image = self.render_obj(v_obj, sample_indices=sample_indices)  # (B, N, W, W)
+        image = self.render_obj(v_obj)  # (B, N, W, W)
         keep = self.keep_mask_object[sample_indices, None]
         image = keep * image
         image_ref = self.ref_mask_object[sample_indices, None]  # (B, 1, W, W)
@@ -541,13 +551,13 @@ class HOForwarderV2Impl(HOForwarderV2):
                     image_ref.repeat(1, n, 1, 1).view(b*n, w, w).detach())  # (B*N,)
                 iou = iou.view(b, n)  # (B, N)
         loss_dict["offscreen"] = 100000 * self.compute_offscreen_loss(
-            v_obj, sample_indices=sample_indices)
+            v_obj)
         if not loss_only:
             return loss_dict, iou, image
         else:
             return loss_dict
 
-    def compute_offscreen_loss(self, verts, sample_indices=None):
+    def compute_offscreen_loss(self, verts):
         """
         Computes loss for offscreen penalty. This is used to prevent the degenerate
         solution of moving the object offscreen to minimize the chamfer loss.
@@ -561,9 +571,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         # On-screen means coord_xy between [-1, 1] and far > depth > 0
         b, n = verts.size(0), verts.size(1)
         batch_K = self.camintr.unsqueeze(1).expand(self.bsize, n, 3, 3)  # (B, N, 3, 3)
-        if sample_indices is None:
-            sample_indices = np.arange(self.bsize)
-        batch_K = batch_K[sample_indices, ...]
+        batch_K = batch_K[self.sample_indices, ...]
         proj = nr.projection(
             verts.view(b*n, -1, 3),
             batch_K.view(b*n, 3, 3),
@@ -608,7 +616,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             all_masks, silhouettes, depths)
         return loss_dict['depth']
 
-    def physical_factor(self, sample_indices=None) -> torch.Tensor:
+    def physical_factor(self) -> torch.Tensor:
         """ We should relate 3D distance to render image size
         so they have similar magnitude.
 
@@ -618,8 +626,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         Returns:
             factor : (B,) same length as sample_indces
         """
-        sample_indices = np.arange(self.bsize) if sample_indices is None else sample_indices
-        fx = self.camintr[sample_indices, 0, 0]
+        fx = self.camintr[self.sample_indices, 0, 0]
         return fx * self.mask_size
 
     def loss_center(self, obj_idx=0, v_hand=None, v_obj=None) -> torch.Tensor:
@@ -641,22 +648,19 @@ class HOForwarderV2Impl(HOForwarderV2):
     def loss_chamfer(self,
                      obj_idx=0,
                      v_hand=None,
-                     v_obj=None,
-                     sample_indices=None) -> torch.Tensor:
+                     v_obj=None) -> torch.Tensor:
         """ returns a scalar """
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_chamfer = compute_chamfer_distance(
             v_hand, v_obj[:, obj_idx],
             batch_reduction=None)  # (B,)
-        l_chamfer = self.physical_factor(sample_indices=sample_indices) * l_chamfer
+        l_chamfer = self.physical_factor() * l_chamfer
         l_chamfer = (l_chamfer**2).sum()
         return l_chamfer
 
-    def loss_nearest_dist(self, v_hand=None, v_obj=None, sample_indices=None) -> torch.Tensor:
+    def loss_nearest_dist(self, v_hand=None, v_obj=None) -> torch.Tensor:
         """ returns (B, N_obj) """
-        if sample_indices is None:
-            sample_indices = np.arange(self.bsize)
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
         bsize, num_obj = v_hand.size(0), v_obj.size(1)
@@ -665,7 +669,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         v_obj = v_obj.view(bsize*num_obj, -1, 3)
         l_min_d = compute_nearest_dist(v_obj, v_hand_copied)
         l_min_d = l_min_d.view(bsize, num_obj)
-        phy_factor = self.physical_factor(sample_indices).view(-1, 1).expand(-1, num_obj)
+        phy_factor = self.physical_factor().view(-1, 1).expand(-1, num_obj)
         return l_min_d * phy_factor
 
     def loss_contact(self, obj_idx=0, v_hand=None, v_obj=None):
@@ -679,7 +683,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             faces_hand=self.faces_hand)
         return l_contact['contact']
 
-    def loss_collision(self, obj_idx=0, v_hand=None, v_obj=None, sample_indices=None):
+    def loss_collision(self, obj_idx=0, v_hand=None, v_obj=None):
         """
         Returns:
             (B,)
@@ -688,7 +692,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_collision = compute_collision_loss(
             v_hand, v_obj[:, obj_idx], self._expand_obj_faces(self.bsize))
-        l_collision = self.physical_factor(sample_indices=sample_indices) * l_collision
+        l_collision = self.physical_factor() * l_collision
         return l_collision
 
     """ Contact regions """
@@ -698,8 +702,7 @@ class HOForwarderV2Impl(HOForwarderV2):
                        squared_dist=False,
                        num_priors=8, 
                        reduce_type='avg',
-                       num_nearest_points=1,
-                       sample_indices=None):
+                       num_nearest_points=1):
         """
         L = distance from finger tips to their nearest vertices
         average over 8(=5+3) regions.
@@ -715,8 +718,6 @@ class HOForwarderV2Impl(HOForwarderV2):
             loss: (B, N_obj)
         """
         k1 = num_nearest_points
-        if sample_indices is None:
-            sample_indices = np.arange(self.bsize)
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
 
@@ -749,7 +750,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         elif reduce_type == 'avg':
             loss = regions_min.mean(dim=-1)
 
-        phy_factor = self.physical_factor(sample_indices=sample_indices)
+        phy_factor = self.physical_factor()
         phy_factor = phy_factor.view(-1, 1).expand(-1, num_obj)
         loss = loss.view(bsize, num_obj)
         loss = loss * phy_factor
@@ -758,7 +759,6 @@ class HOForwarderV2Impl(HOForwarderV2):
     def loss_insideness(self,
                         v_hand=None, v_obj=None,
                         squared_dist=False,
-                        sample_indices=None,
                         num_nearest_points=3,
                         debug_viz=False):
         """
@@ -775,8 +775,6 @@ class HOForwarderV2Impl(HOForwarderV2):
             loss: (B, N_obj, V)
         """
         k2 = num_nearest_points
-        if sample_indices is None:
-            sample_indices = np.arange(self.bsize)
 
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         vn_hand = compute_vert_normals(v_hand, faces=self.faces_hand[0])
@@ -803,7 +801,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             prod = prod**2
         score  = prod.mean(-1)  # (B, N, V)
         loss =  (- score.clamp_max_(0)).mean(-1)  # (B, N)
-        phy_factor = self.physical_factor(sample_indices).view(bsize, 1)
+        phy_factor = self.physical_factor().view(bsize, 1)
         loss = loss * phy_factor
 
         if debug_viz:
@@ -819,6 +817,46 @@ class HOForwarderV2Impl(HOForwarderV2):
             return trimesh.Scene([mhand, mobj])
 
         return loss
+    
+    """ system objectives """
+    def train_loss(self, cfg, print_metric=False):
+        with torch.no_grad():
+            v_hand = self.get_verts_hand()[self.sample_indices, ...]
+        v_obj = self.get_verts_object(
+            transl_gradient_only=False)[self.sample_indices, ...]
+
+        l_obj_dict = self.forward_obj_pose_render(
+            v_obj=v_obj)  # (B, N)
+        l_obj_mask = l_obj_dict['mask'].sum()
+
+        l_inside = self.loss_insideness(
+            v_hand=v_hand, v_obj=v_obj,
+            num_nearest_points=cfg.loss.inside.num_nearest_points)
+        l_inside = l_inside.sum()
+
+        l_close = self.loss_closeness(
+            v_hand=v_hand, v_obj=v_obj,
+            num_priors=cfg.loss.close.num_priors,
+            reduce_type=cfg.loss.close.reduce,
+            num_nearest_points=cfg.loss.close.num_nearest_points)
+        l_close = l_close.sum()
+
+        # Accumulate
+        tot_loss = cfg.loss.mask.weight * l_obj_mask +\
+            cfg.loss.inside.weight * l_inside +\
+            cfg.loss.close.weight * l_close
+        
+        if print_metric:
+            min_dist = self.loss_nearest_dist(
+                v_hand=v_hand, v_obj=v_obj).min()
+            print(
+                f"obj_mask:{l_obj_mask.item():.3f} "
+                f"inside:{l_inside.item():.3f} "
+                f"close:{l_close.item():.3f} "
+                f"min_dist: {min_dist:.3f} "
+                )
+
+        return tot_loss
 
 
 from typing import List, Tuple
@@ -841,6 +879,17 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         super().__init__(*args, **kwargs)
         self.vis_rend_size = vis_rend_size
         self.ihoi_img_patch = ihoi_img_patch
+        self._sample_indices = None
+
+    @property
+    def sample_indices(self):
+        if self._sample_indices is None:
+            return np.arange(self.bsize)
+        return self._sample_indices
+
+    @sample_indices.setter
+    def sample_indices(self, value):
+        self._sample_indices = value
 
     def get_meshes(self, scene_idx, obj_idx, **mesh_kwargs) -> Tuple[SimpleMesh]:
         """
@@ -1079,7 +1128,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         return np.hstack([front, left, back])
 
     def render_grid_np(self, obj_idx=0, with_hand=True,
-                       sample_indices=None, *args, **kwargs) -> np.ndarray:
+                       *args, **kwargs) -> np.ndarray:
         """ low resolution but faster """
         l = self.bsize
         num_cols = 5
@@ -1095,9 +1144,7 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
 
         h, w, _ = imgs[0].shape
         out = np.empty(shape=(num_rows*h, num_cols*w, 3), dtype=imgs[0].dtype)
-        if sample_indices is None:
-            sample_indices = np.arange(self.bsize)
-        sample_indices = set(sample_indices)
+        sample_indices = set(self.sample_indices)
         for row in range(num_rows):
             for col in range(num_cols):
                 idx = row*num_cols+col
