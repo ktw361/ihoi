@@ -180,8 +180,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                            scale_inits,
                            weights=None,
                            save_grid: str = None,
-                           cfg = None,
-                           debug_no_reinit=False):
+                           cfg = None):
     """
     Args:
         save_grid: str, fname to save the optimization process
@@ -190,7 +189,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
     # Read out from config
     lr = cfg.lr
     num_epochs = cfg.num_epochs
-    num_obj = cfg.num_obj_parallel
+    num_epoch_parallel = cfg.num_epoch_parallel
     num_iters = cfg.num_iters
     temperature = cfg.temperature
     ratio = cfg.ratio
@@ -213,12 +212,11 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
         sample_indices = choose_with_softmax(
             weights, temperature=temperature, ratio=ratio)
 
-        if not debug_no_reinit:
-            homan.set_obj_transform(
-                translation_inits[[e],...],
-                rotation_inits[[e],...],
-                scale_inits[[e],...])
-            homan._check_shape_object(homan.num_obj)
+        homan.set_obj_transform(
+            translation_inits[[e],...],
+            rotation_inits[[e],...],
+            scale_inits[[e],...])
+        homan._check_shape_object(homan.num_obj)
 
         optimizer = torch.optim.Adam([{
             'params': [
@@ -304,11 +302,5 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
         torch.softmax(torch.as_tensor([-v.inside for v in results]), 0)
     idx = final_score.argmax()
     R, t, s = results[idx].R, results[idx].t, results[idx].s
-
-    if not debug_no_reinit:
-        homan.set_obj_transform(
-            translations_object=t,
-            rotations_object=R,
-            scale_object=s)
 
     return homan, weights, results
