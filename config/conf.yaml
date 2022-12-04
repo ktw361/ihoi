@@ -40,7 +40,7 @@ optim:
 
     lr: 1e-2
     num_epochs: 40
-    num_epoch_parallel: 4
+    num_epoch_parallel: 4  # 8: 8G, 10: 10G
     epoch_tqdm: True
     num_iters: 50
     iter_tqdm: False

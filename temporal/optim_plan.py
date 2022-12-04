@@ -237,6 +237,9 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                     frame = homan.render_grid_np(0, True)
                     out_frames.append(frame)
 
+                if torch.isnan(tot_loss) or torch.isinf(tot_loss):
+                    tot_loss = torch.tensor(float('nan'))
+                    break
                 tot_loss.backward()
                 optimizer.step()
                 loop.set_description(f"tot_loss: {tot_loss.item():.3g}")
@@ -246,18 +249,19 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             v_hand = homan.get_verts_hand()[homan.sample_indices, ...]
             v_obj = homan.get_verts_object(
                 transl_gradient_only=False)[homan.sample_indices, ...]
-            mask_score = homan.forward_obj_pose_render()['mask'].sum()
+            mask_score = homan.forward_obj_pose_render()['mask'].sum(0)
             inside_score = homan.loss_insideness(
-                v_hand=v_hand, v_obj=v_obj).sum()
+                v_hand=v_hand, v_obj=v_obj).sum(0)
             close_score = homan.loss_closeness(
-                v_hand=v_hand, v_obj=v_obj).sum()
+                v_hand=v_hand, v_obj=v_obj).sum(0)
             R = homan.rotations_object.detach().clone()
             t = homan.translations_object.detach().clone()
             s = homan.scale_object.detach().clone()
-            element = ElementType(
-                mask_score.item(), inside_score.item(), close_score.item(),
-                R, t, s)
-            results.append(element)
+            for i in range(num_epoch_parallel):
+                element = ElementType(
+                    mask_score[i].item(), inside_score[i].item(), close_score[i].item(),
+                    R[i], t[i], s[i])
+                results.append(element)
         # Update weights
         weights[homan.sample_indices] -= tot_loss
 
@@ -270,5 +274,9 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
         torch.softmax(torch.as_tensor([-v.inside for v in results]), 0)
     idx = final_score.argmax()
     R, t, s = results[idx].R, results[idx].t, results[idx].s
+    homan.set_obj_transform(
+        translations_object=t,
+        rotations_object=R,
+        scale_object=s)
 
     return homan, weights, results
