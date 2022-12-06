@@ -20,7 +20,7 @@ preprocess:
 homan:
     scale_mode: ???  # Object scale mode: 'depth' / 'scalar' / 'xyz'
     rot_init_method: 'spiral'       # 'random' / 'spiral'
-    transl_init_method: 'fingers'   # 'zero' / 'fingers' / 'mask'
+    transl_init_method: 'fingers'   # 'zero' / 'fingers'(finger centers) / 'mask'
     scale_init_method: 'est'        # 'one' / 'xyz' / 'est'
     rotation_regularization: False  # TODO
     scale_regularization: False

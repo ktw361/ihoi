@@ -238,7 +238,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                     out_frames.append(frame)
 
                 if torch.isnan(tot_loss) or torch.isinf(tot_loss):
-                    tot_loss = torch.tensor(float('nan'))
+                    tot_loss = weights.abs().max().detach().clone()
                     break
                 tot_loss.backward()
                 optimizer.step()
