@@ -728,20 +728,20 @@ class HOForwarderV2Impl(HOForwarderV2):
         ph_idx = reduce(lambda a, b: a + b, self.contact_regions.verts, [])
         ph = v_hand[:, ph_idx, :]
         ph_copied = ph.unsqueeze(1).expand(-1, num_obj, -1, -1).reshape(
-            bsize * num_obj, -1, 3)  # (B*N, Vh, 3)
+            bsize * num_obj, -1, 3)  # (B*N, CONTACT, 3)
         _, idx, nn = knn_points(ph_copied, v_obj, K=k1, return_nn=True)
         # idx: (B*N, CONTACT, k1),  nn: (B*N, CONTACT, k1, 3)
-        vn_obj_nn = knn_gather(vn_obj, idx)  # (B*N, V, k1, 3)
+        vn_obj_nn = knn_gather(vn_obj, idx)  # (B*N, CONTACT, k1, 3)
 
         ph_copied = ph_copied.view(bsize*num_obj, -1, 1, 3).expand(-1, -1, k1, -1)
-        prod = torch.sum((ph_copied - nn) * vn_obj_nn, dim=-1)  # (B*N, V_h, k1, 3) => (B*N, V_h, k1)
+        prod = torch.sum((ph_copied - nn) * vn_obj_nn, dim=-1)  # (B*N, CONTACT, k1, 3) => (B*N, CONTACT, k1)
         prod = prod**2 if squared_dist else prod.abs_()
         index = torch.cat(
             [prod.new_zeros(len(v), dtype=torch.long) + i
              for i, v in enumerate(self.contact_regions.verts)])
         
         # Use mean for k1 nearest points
-        prod = prod.mean(-1)    # (B*N, V_h, k1) => (B*N, V_h)
+        prod = prod.mean(-1)    # (B*N, CONTACT, k1) => (B*N, CONTACT)
         regions_min, _ = scatter_min(src=prod, index=index, dim=1)  # (B*N, 8)
         regions_min = regions_min[..., :num_priors]
 
