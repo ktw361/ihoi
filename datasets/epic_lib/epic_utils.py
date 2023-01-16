@@ -103,6 +103,53 @@ def read_mask_with_occlusion(path: str,
     return mask_hand, mask_obj
 
 
+def read_v3_mask_with_occlusion(path: str,
+                                side_id: int,
+                                cid: int,
+                                crop_hand_mask=False,
+                                crop_hand_expand=0.0,
+                                hand_box: np.ndarray = None):
+    """ For HOS_V3 mask
+    Args:
+        path: <path_to_frame_xxx.png>
+        side: hand side index in data_mapping.json
+        cid: object category index in data_mapping.json
+        crop_hand_mask: whether to crop hand mask to hand_box region
+        crop_hand_expand: expand ratio
+        hand_box: (4,)
+    
+    Returns:
+        mask_hand, mask_obj: np.ndarray (H, W) int32
+            1 fg, -1 ignore, 0 bg
+    """
+    mask = Image.open(path).convert('P')
+    mask = np.asarray(mask, dtype=np.int32)
+    mask_hand = np.zeros_like(mask)
+    mask_obj = np.zeros_like(mask)
+    mask_hand[mask == side_id] = 1
+    mask_obj[mask == cid] = 1
+    if crop_hand_mask:
+        x0, y0, bw, bh = hand_box
+        x1, y1 = x0 + bw, y0 + bh
+        x0 -= bw * crop_hand_expand / 2
+        y0 -= bh * crop_hand_expand / 2
+        x1 += bw * crop_hand_expand / 2
+        y1 += bh * crop_hand_expand / 2
+        x0, y0, x1, y1 = map(int, (x0, y0, x1, y1))
+        x0 = min(max(0, x0), mask.shape[1])
+        y0 = min(max(0, y0), mask.shape[0])
+        x1 = min(max(0, x1), mask.shape[1])
+        y1 = min(max(0, y1), mask.shape[0])
+        mask_hand_crop = np.zeros_like(mask_hand)
+        mask_hand_crop[mask_hand == 1] = -1
+        mask_hand_crop[y0:y1, x0:x1] = mask_hand[y0:y1, x0:x1]
+        mask_hand_crop[mask_obj == 1] = -1
+        mask_hand = mask_hand_crop
+    # This has to happen after cropping
+    mask_obj[mask_hand == 1] = -1
+    return mask_hand, mask_obj
+
+
 """ Hoa """
 HOA_ROOT = '/home/skynet/Zhifan/datasets/epic/hoa/'
 hoa_map = dict()

@@ -1,7 +1,6 @@
 from typing import NamedTuple, List, Union
 import pickle, json
 import os, re, bisect
-import os.path as osp
 from PIL import Image
 from pathlib import Path
 import numpy as np
@@ -11,9 +10,9 @@ from torch.utils.data import Dataset
 
 from config.epic_constants import HAND_MASK_KEEP_EXPAND, EPIC_HOA_SIZE, VISOR_SIZE
 from nnutils.image_utils import square_bbox
-from datasets.epic_lib.epic_utils import (
-    read_epic_image, read_mask_with_occlusion)
+from datasets.epic_lib.epic_utils import read_v3_mask_with_occlusion
 
+from libzhifan import io
 from libzhifan.odlib import xyxy_to_xywh, xywh_to_xyxy
 from libzhifan.geometry import CameraManager, BatchCameraManager
 
@@ -34,8 +33,6 @@ import cv2
 previous:
 - epic_analysis/interpolation: 854x480
 """
-
-#TODO: check the conversion between cat and visor_name
 
 class PairLocator:
     """ locate a (vid, frame) in P01_01_0003 """
@@ -128,19 +125,17 @@ class EpicClipDatasetV3(Dataset):
     def __init__(self,
                  image_sets='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_progress.json',
                  all_boxes='./weights/v3_clip_boxes.pkl',
+                 cat_data_mapping='/media/skynet/DATA/Datasets/visor-dense/meta_infos/data_mapping.json',
                  image_size=VISOR_SIZE,
                  hand_expansion=0.4,
                  crop_hand_mask=True,
-                 sample_frames=20,
+                 sample_frames=20,  # TODO, take into account mask quality?
                  *args,
                  **kwargs):
         """_summary_
 
         Args:
             image_sets (str): path to clean set frames
-            epic_root (str):
-            hoa_root (str):
-            mask_dir (str):
             image_size: Tuple of (W, H)
             hand_expansion (float): size of hand bounding box after squared.
             crop_hand_mask: If True, will crop hand mask with only pixels
@@ -154,6 +149,7 @@ class EpicClipDatasetV3(Dataset):
         self.hand_expansion = hand_expansion
         self.crop_hand_mask = crop_hand_mask
         self.sample_frames = sample_frames
+        self.cat_data_mapping = io.read_json(cat_data_mapping)
 
         # Locate frame in davis formatted folders
         self.locator = PairLocator()
@@ -262,8 +258,8 @@ class EpicClipDatasetV3(Dataset):
             cat: str, object categroy
         """
         info = self.data_infos[index]
-        vid, cat, side, start, end = \
-            info.vid, info.cat, info.side, info.start, info.end
+        vid, cat, visor_name, side, start, end = \
+            info.vid, info.cat, info.visor_name, info.side, info.start, info.end
         if self.sample_frames < 0 and end - start > 100:
             raise NotImplementedError(f"frames more than 100 : {end - start}.")
         images = []
@@ -276,6 +272,9 @@ class EpicClipDatasetV3(Dataset):
         else:
             frames = np.linspace(start, end, num=self.sample_frames, dtype=int)
 
+        _side = 'left hand' if 'left' in side else 'right hand'
+        side_id = self.cat_data_mapping[vid][_side]
+        cid = self.cat_data_mapping[vid][visor_name]
         for frame_idx in frames:
             folder = self.locator.locate(vid, frame_idx)
             image = Image.open(self.image_fmt % (folder, vid, frame_idx))
@@ -294,9 +293,8 @@ class EpicClipDatasetV3(Dataset):
 
             # masks
             path = self.mask_fmt % (vid, vid, frame_idx)
-            mask_hand, mask_obj = read_mask_with_occlusion(
-                path,
-                out_size=self.image_size, side=side, cat=cat,
+            mask_hand, mask_obj = read_v3_mask_with_occlusion(
+                path, side_id, cid,
                 crop_hand_mask=self.crop_hand_mask,
                 crop_hand_expand=HAND_MASK_KEEP_EXPAND,
                 hand_box=self._get_hand_box(vid, frame_idx, side, expand=False))
@@ -328,11 +326,11 @@ class EpicClipDatasetV3(Dataset):
 def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_progress.json',
                    gen_videos=True):
 
-    from pathlib import Path
     from PIL import Image
     from moviepy import editor
     import bisect, re
     from libzhifan import io
+    import tqdm
     from datasets.epic_lib import epichoa
 
     class Mapper:
@@ -484,8 +482,7 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
     hos_v3 = list(filter(is_valid, [ClipInfo(**v) for v in hos_v3]))
     all_boxes = dict()
 
-    for clip in hos_v3[:1]:
-        print(clip)
+    for clip in tqdm.tqdm(hos_v3):
         vid = clip.vid
         start = clip.start
         end = clip.end
