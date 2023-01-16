@@ -1,13 +1,15 @@
-from typing import NamedTuple, List
-import pickle
-import json
+from typing import NamedTuple, List, Union
+import pickle, json
+import os, re, bisect
 import os.path as osp
+from PIL import Image
+from pathlib import Path
 import numpy as np
 import torch
 
 from torch.utils.data import Dataset
 
-from config.epic_constants import HAND_MASK_KEEP_EXPAND
+from config.epic_constants import HAND_MASK_KEEP_EXPAND, EPIC_HOA_SIZE, VISOR_SIZE
 from nnutils.image_utils import square_bbox
 from datasets.epic_lib.epic_utils import (
     read_epic_image, read_mask_with_occlusion)
@@ -22,29 +24,89 @@ odlib.setup('xywh')
 import cv2
 
 
-epic_cats = [
-    '_bg',
-    'left hand',
-    'right hand',
-    'can',
-    'cup',
-    'plate',
-    'bottle',
-    'mug',
-    'bowl',
-]
+""" Sizes:
+- HOA uses 1920x1080
+- visor-dense/interpolations: 854x480
+- visor-dense/480p: 854x480
+- visor-sparse/images: 1920x1080
+- visor-sparse/masks: 854x480
 
+previous:
+- epic_analysis/interpolation: 854x480
+"""
 
-def row2xywh(row):
-    wid = row.right - row.left
-    hei = row.bottom - row.top
-    return np.asarray([row.left, row.top, wid, hei])
+#TODO: check the conversion between cat and visor_name
+
+class PairLocator:
+    """ locate a (vid, frame) in P01_01_0003 """
+    def __init__(self,
+                 result_root='/home/skynet/Zhifan/data/visor-dense/480p',
+                 pair_infos='/home/skynet/Zhifan/data/visor-dense/meta_infos/480p_pair_infos.txt',
+                 verbose=True):
+        self.result_root = Path(result_root)
+        with open(pair_infos) as fp:
+            pair_infos = fp.readlines()
+            pair_infos = [v.strip().split(' ') for v in pair_infos]
+
+        self._build_index(pair_infos)
+        self.verbose = verbose
+
+    def _build_index(self, pair_infos: list):
+        """ pair_infos[i] = ['P01_01_0003', '123', '345']
+        """
+        self._all_full_frames = []
+        self._all_folders = []
+        for folder, st, ed in pair_infos:
+            min_frame = int(st)
+            index = self._hash(folder, min_frame)
+            self._all_full_frames.append(index)
+            self._all_folders.append(folder)
+
+        self._all_full_frames = np.int64(self._all_full_frames)
+        sort_idx = np.argsort(self._all_full_frames)
+        self._all_full_frames = self._all_full_frames[sort_idx]
+        self._all_folders = np.asarray(self._all_folders)[sort_idx]
+
+    @staticmethod
+    def _hash(vid: str, frame: int):
+        pid, sub = vid.split('_')[:2]
+        pid = pid[1:]
+        op1, op2, op3 = map(int, (pid, sub, frame))
+        index = op1 * int(1e15) + op2 * int(1e12) + op3
+        return index
+
+    def locate(self, vid, frame) -> Union[str, None]:
+        """
+        Returns: a str in DAVIS folder format: {vid}_{%4d}
+            e.g P11_16_0107
+        """
+        query = self._hash(vid, frame)
+        loc = bisect.bisect_right(self._all_full_frames, query)
+        if loc == 0:
+            return None
+        r = self._all_folders[loc-1]
+        r_vid = '_'.join(r.split('_')[:2])
+        if vid != r_vid:
+            if self.verbose:
+                print(f"folder for {vid} not found")
+            return None
+        frames = map(
+            lambda x: int(re.search('[0-9]{10}', x).group(0)),
+            os.listdir(self.result_root/r))
+        if max(frames) < frame:
+            if self.verbose:
+                print(f"Not found in {r}")
+            return None
+        return r
 
 
 class ClipInfo(NamedTuple):
     vid: str
-    gt_frame: str
+    gt_frames: str
     cat: str
+    visor_name: str
+    st_bound: int
+    ed_bound: int
     side: str
     start: int
     end: int
@@ -61,31 +123,12 @@ class DataElement(NamedTuple):
     cat: str
 
 
-class EpicClipDataset(Dataset):
-
-    wrong_set = {
-        # Hand box missing/wrong-side in hoa
-        ('P04_13', 10440),
-        ('P11_16', 18079),
-        ('P12_04', 1828),
-        ('P12_101', 21783),
-        ('P15_02', 25465),
-        ('P22_107', 6292),
-        ('P28_109', 10026),
-        ('P37_101', 70106),
-        # object box no merged
-        ('P01_103', 538),
-        ('P03_04', 43470),
-        ('P11_16', 16029),
-        ('P37_101', 15996),
-    }
+class EpicClipDatasetV3(Dataset):
 
     def __init__(self,
-                 image_sets='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json',
-                 epic_root='/home/skynet/Zhifan/datasets/epic',
-                 mask_dir='/home/skynet/Zhifan/data/epic_analysis/InterpV2',
-                 all_boxes='/home/skynet/Zhifan/data/epic_analysis/clip_boxes.pkl',
-                 image_size=(1280, 720), # (640, 360),
+                 image_sets='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_progress.json',
+                 all_boxes='./weights/v3_clip_boxes.pkl',
+                 image_size=VISOR_SIZE,
                  hand_expansion=0.4,
                  crop_hand_mask=True,
                  sample_frames=20,
@@ -107,15 +150,17 @@ class EpicClipDataset(Dataset):
                 subsample them to a reduced number.
         """
         super().__init__(*args, **kwargs)
-        self.epic_rgb_root = osp.join(epic_root, 'rgb_root')
-        self.mask_dir = mask_dir
-        self.hoa_root = osp.join(epic_root, 'hoa')
         self.image_size = image_size
         self.hand_expansion = hand_expansion
         self.crop_hand_mask = crop_hand_mask
         self.sample_frames = sample_frames
 
-        self.box_scale = np.asarray(image_size * 2) / ((1920, 1080) * 2)
+        # Locate frame in davis formatted folders
+        self.locator = PairLocator()
+        self.image_fmt = '/media/skynet/DATA/Datasets/visor-dense/480p/%s/%s_frame_%010d.jpg'  # % (folder, vid, frame)
+        self.mask_fmt = '/media/skynet/DATA/Datasets/visor-dense/interpolations/%s/%s_frame_%010d.png'  # % (vid, vid, frame)
+
+        self.box_scale = np.asarray(image_size * 2) / (EPIC_HOA_SIZE * 2)
         self.data_infos = self._read_image_sets(image_sets)
         with open(all_boxes, 'rb') as fp:
             self.ho_boxes = pickle.load(fp)
@@ -131,11 +176,17 @@ class EpicClipDataset(Dataset):
         with open(image_sets) as fp:
             infos = json.load(fp)
 
-        infos = [ClipInfo(**v)
-                 for v in infos
-                 if (v['vid'], v['gt_frame']) not in self.wrong_set]
-        infos = [v for v in infos if len(v.comments) == 0]
-        return infos
+        def is_valid(info: ClipInfo):
+            if 'manip' in info.comments:
+                return False
+            if 'short' in info.comments:
+                return False
+            if 'del' in info.comments:
+                return False
+            return info.start != -1 and info.end != -1
+
+        infos = [ClipInfo(**v) for v in infos]
+        return list(filter(is_valid, infos))
 
     def __len__(self):
         return len(self.data_infos)
@@ -226,9 +277,8 @@ class EpicClipDataset(Dataset):
             frames = np.linspace(start, end, num=self.sample_frames, dtype=int)
 
         for frame_idx in frames:
-            image = read_epic_image(
-                vid, frame_idx, as_pil=True)
-            image = image.resize(self.image_size)
+            folder = self.locator.locate(vid, frame_idx)
+            image = Image.open(self.image_fmt % (folder, vid, frame_idx))
             image = np.asarray(image)
 
             # bboxes
@@ -243,7 +293,7 @@ class EpicClipDataset(Dataset):
             obj_bbox_arr = self._get_obj_box(vid, frame_idx, cat)
 
             # masks
-            path = f'{self.mask_dir}/{vid}/frame_{frame_idx:010d}.png'
+            path = self.mask_fmt % (vid, vid, frame_idx)
             mask_hand, mask_obj = read_mask_with_occlusion(
                 path,
                 out_size=self.image_size, side=side, cat=cat,
@@ -275,8 +325,218 @@ class EpicClipDataset(Dataset):
         return element
 
 
+def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_progress.json',
+                   gen_videos=True):
+
+    from pathlib import Path
+    from PIL import Image
+    from moviepy import editor
+    import bisect, re
+    from libzhifan import io
+    from datasets.epic_lib import epichoa
+
+    class Mapper:
+        """ Mapping from VISOR frame to EPIC frame """
+
+        def __init__(self,
+                    mapping='/home/skynet/Zhifan/data/epic_analysis/resources/mapping_visor_to_epic.json'):
+            mapping = io.read_json(mapping)
+            cvt = lambda x : int(re.search('\d{10}', x).group(0))
+            vids = mapping.keys()
+
+            self.visor = dict()
+            self.epic = dict()
+            for vid in vids:
+                src, dst = list(zip(*mapping[vid].items()))
+                src = list(map(cvt, src))
+                dst = list(map(cvt, dst))
+                self.visor[vid] = src
+                self.epic[vid] = dst
+
+        def __call__(self, vid, frame: int) -> int:
+            i = bisect.bisect_right(self.visor[vid], frame)  # first i s.t visor[i] strictly greater than frame
+            if i == 0:
+                a, b = 0, self.visor[vid][i]
+                p, q = 0, self.epic[vid][i]
+            elif i == len(self.visor[vid]):
+                a = self.visor[vid][i-1]
+                p = self.epic[vid][i-1]
+                return frame - a + p
+            else:
+                a, b = self.visor[vid][i-1], self.visor[vid][i]
+                p, q = self.epic[vid][i-1], self.epic[vid][i]
+            k = (frame - a) / (b - a)
+            y = k * (q - p) + p
+            return round(y)
+
+    def row2xywh(row):
+        wid = row.right - row.left
+        hei = row.bottom - row.top
+        return np.asarray([row.left, row.top, wid, hei])
+
+    def box_dist(box1, box2):
+        """ distance for xywh box (4,) """
+        dist = np.linalg.norm(box1[:2] - box2[:2])
+        return dist
+
+    def compute_hand_box(det_box: np.ndarray,
+                         mask: np.ndarray,
+                         hid: int) -> np.ndarray:
+        """ Compute hand_box using mask but with region inside expanded det_box only.
+            1. Expand det_box
+            2. Keep mask inside det_box only
+            3. Compute box, which is tight
+
+        Args:
+            hand_box: (4,)
+            mask: (H, W) np.uint8
+            hid: int. Hand index
+
+        Returns:
+            box: (4,)
+        """
+        H, W = mask.shape
+        det_box = det_box.astype(int)
+        x, y, bw, bh = det_box
+        det_size = max(bw, bh)
+        pad = det_size * HAND_MASK_KEEP_EXPAND / 2
+        x0 = max(int(x - pad), 0)
+        y0 = max(int(y - pad), 0)
+        x1 = min(int(x + bw + pad), W-1)
+        y1 = min(int(y + bh + pad), H-1)
+
+        crop_mask = np.zeros_like(mask)
+        crop_mask[y0:y1, x0:x1] = mask[y0:y1, x0:x1]
+        # assert n_cls == 2
+        h, w = mask.shape[:2]
+        y, x = np.nonzero(crop_mask == hid)
+        pad = 1
+        x0, x1 = max(x.min()-pad, 0), min(x.max()+pad, w-1)
+        y0, y1 = max(y.min()-pad, 0), min(y.max()+pad, h-1)
+        hand_box = np.asarray([x0, y0, x1-x0, y1-y0], dtype=np.float32)
+        return hand_box
+
+    def boxes_from_mask(mask: np.ndarray,
+                        size_mul=1.0,
+                        pad=2,
+                        debug=False) -> np.ndarray:
+        """ (H, W) -> (N,4)
+        If distance between two boxes <
+            `size_mul` x max(size_1, size_2),
+            merge them.
+        """
+        n_cls, mask = cv2.connectedComponents(
+            mask, connectivity=8)
+
+        boxes = []
+        for c in range(1, n_cls):
+            h, w = mask.shape[:2]
+            y, x = np.nonzero(mask == c)
+            x0, x1 = max(x.min()-pad, 0), min(x.max()+pad, w-1)
+            y0, y1 = max(y.min()-pad, 0), min(y.max()+pad, h-1)
+            box = np.asarray([x0, y0, x1-x0, y1-y0], dtype=np.float32)
+            boxes.append(box)
+
+        visit = set()
+        finals = []
+        for i in range(len(boxes)):
+            if i in visit:
+                continue
+            box1 = boxes[i]
+            bc1 = box1[:2] + box1[2:]/2
+            sz1 = np.linalg.norm(box1[2:])
+            for j in range(i+1, len(boxes)):
+                if j in visit:
+                    continue
+                box2 = boxes[j]
+                bc2 = box2[:2] + box2[2:]/2
+                dist = box_dist(box1, box2)
+                sz2 = np.linalg.norm(box2[2:])
+                if debug:
+                    print(dist, sz1, sz2)
+                if dist < size_mul * max(sz1, sz2): # Merge
+                    x0 = min(box1[0], box2[0])
+                    y0 = min(box1[1], box2[1])
+                    x1 = max(box1[0]+box1[2], box2[0]+box2[2])
+                    y1 = max(box1[1]+box1[3], box2[1]+box2[3])
+                    box1 = np.float32([x0, y0, x1-x0, y1-y0])
+                    visit.add(j)
+            finals.append(box1)
+
+        return np.stack(finals)
+
+    hoa_root = '/home/skynet/Zhifan/datasets/epic/hoa/'
+    mask_fmt = '/media/skynet/DATA/Datasets/visor-dense/interpolations/%s/%s_frame_%010d.png'  # % (vid, vid, frame)
+    data_mapping = io.read_json('/media/skynet/DATA/Datasets/visor-dense/meta_infos/data_mapping.json')
+    mapper = Mapper()
+    locator = PairLocator()
+    image_fmt = '/media/skynet/DATA/Datasets/visor-dense/480p/%s/%s_frame_%010d.jpg'  # % (folder, vid, frame)
+
+    hos_v3 = io.read_json(hos_v3)
+    def is_valid(info: ClipInfo):
+        if 'manip' in info.comments:
+            return False
+        if 'short' in info.comments:
+            return False
+        if 'del' in info.comments:
+            return False
+        return info.start != -1 and info.end != -1
+    hos_v3 = list(filter(is_valid, [ClipInfo(**v) for v in hos_v3]))
+    all_boxes = dict()
+
+    for clip in hos_v3[:1]:
+        print(clip)
+        vid = clip.vid
+        start = clip.start
+        end = clip.end
+        side = clip.side
+        cat = clip.cat
+        cid = data_mapping[vid][clip.visor_name]  # original name
+        df = epichoa.load_video_hoa(vid, hoa_root=hoa_root)
+        vid_boxes = all_boxes.get(vid, dict())
+        frames = []
+        for frame in range(start, end+1):
+            mask = mask_fmt % (vid, vid, frame)
+            mask = Image.open(mask).convert('P')
+            mask = np.asarray(mask, dtype=np.uint8)
+            obj_mask = np.where(mask == cid, cid, 0).astype(np.uint8)
+            boxes = boxes_from_mask(obj_mask)
+            epic_frame = mapper(vid, frame)  # mapping from visor frame to epic frame, b.c. hoa is in EPIC
+            hand_box = row2xywh(df[
+                (df.frame == epic_frame) & (df.det_type == 'hand') & (df.side == side)].iloc[0])
+            hand_box = hand_box / (EPIC_HOA_SIZE * 2) * (VISOR_SIZE * 2)
+            hand_name = ('left hand' if 'left' in side else 'right hand')
+            hid = data_mapping[vid][hand_name]
+            hand_mask = np.where(mask == hid, hid, 0).astype(np.uint8)
+            hand_box = compute_hand_box(hand_box, hand_mask, hid)
+            """ Only keep the box that is closest to hand """
+            min_dst = np.inf
+            min_idx = 0
+            for bi in range(len(boxes)):
+                dst = box_dist(boxes[bi], hand_box)
+                if box_dist(boxes[bi], hand_box) < min_dst:
+                    min_idx = bi
+                    min_dst = dst
+            # TODO: obj box also reference hoa?
+            obj_box = boxes[min_idx]
+            if gen_videos:
+                image = image_fmt % ( locator.locate(vid, frame), vid, frame)
+                image = Image.open(image)
+                img = odlib.draw_bboxes_image_array(image, obj_box[None], color='purple')
+                odlib.draw_bboxes_image(img, hand_box[None],
+                                        color='green' if 'right' in side else 'red')
+                frames.append(img)
+            frame_boxes = vid_boxes.get(frame, dict())
+            frame_boxes[side] = hand_box
+            frame_boxes[cat] = obj_box
+            vid_boxes[frame] = frame_boxes
+        all_boxes[vid] = vid_boxes
+        if gen_videos:
+            seq = editor.ImageSequenceClip(list(map(np.asarray, frames)), fps=15)
+            seq.write_videofile(
+                f'/home/skynet/Zhifan/ihoi/outputs/tmp/{vid}_{start}_{end}.mp4', verbose=False, logger=None)
+    io.write_pickle(all_boxes, '/home/skynet/Zhifan/ihoi/weights/v3_clip_boxes.pkl')
+
+
 if __name__ == '__main__':
-    dataset = EpicClipDataset(
-        image_sets='/home/skynet/Zhifan/data/epic_analysis/gt_clips.json')
-    item = (dataset[0])
-    print(item)
+    generate_boxes()
