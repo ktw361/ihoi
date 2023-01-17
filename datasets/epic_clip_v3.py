@@ -23,6 +23,24 @@ odlib.setup('xywh')
 import cv2
 
 
+""" Box and mask corner cases:
+1. missing object mask: 
+    This frame is hopeless, should be skipped.
+    Set both hand_box and obj_box to None.
+
+2. missing hoa_hand_boxes: 
+    For now, skip this frame also.
+    In the future: Use mask-generated hand box instead, FrankMocap might be affected?
+
+3. missing hand_mask: 
+    This is allowed, use hoa box
+
+Object mask and box are co-processed as follows:
+Generate obj_boxes (might be many), keep the one that has the largest IoU with hoa_obj_box.
+If the hoa_obj_box is missing, keep the one with shorted distance.
+(Future: Apply tracking to object boxes)
+"""
+
 """ Sizes:
 - HOA uses 1920x1080
 - visor-dense/interpolations: 854x480
@@ -386,12 +404,13 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
             3. Compute box, which is tight
 
         Args:
-            hand_box: (4,)
+            hand_box: (4,) xywh
             mask: (H, W) np.uint8
             hid: int. Hand index
 
         Returns:
-            box: (4,)
+            None if mask doesn't contain hid in det_box region
+            box: (4,) xywh
         """
         H, W = mask.shape
         det_box = det_box.astype(int)
@@ -408,6 +427,8 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
         # assert n_cls == 2
         h, w = mask.shape[:2]
         y, x = np.nonzero(crop_mask == hid)
+        if len(y) == 0 or len(x) == 0:
+            return None
         pad = 1
         x0, x1 = max(x.min()-pad, 0), min(x.max()+pad, w-1)
         y0, y1 = max(y.min()-pad, 0), min(y.max()+pad, h-1)
@@ -422,6 +443,8 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
         If distance between two boxes <
             `size_mul` x max(size_1, size_2),
             merge them.
+        Returns:
+            (N, 4) xywh. or (0, 4) if no object
         """
         n_cls, mask = cv2.connectedComponents(
             mask, connectivity=8)
@@ -434,6 +457,9 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
             y0, y1 = max(y.min()-pad, 0), min(y.max()+pad, h-1)
             box = np.asarray([x0, y0, x1-x0, y1-y0], dtype=np.float32)
             boxes.append(box)
+
+        if len(boxes) == 0:
+            return np.empty((0, 4), dtype=np.float32)
 
         visit = set()
         finals = []
@@ -462,6 +488,23 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
             finals.append(box1)
 
         return np.stack(finals)
+    
+    def compute_box_iou(box1: np.ndarray, boxes: np.ndarray) -> np.ndarray:
+        """
+        Args:
+            box1: (1, 4) xywh
+            boxes: (N, 4) xywh
+        Returns:
+            ious: (N,)
+        """
+        x1, y1, w1, h1 = box1.T
+        x2, y2, w2, h2 = boxes.T
+        x1, x2 = np.maximum(x1, x2), np.minimum(x1+w1, x2+w2)
+        y1, y2 = np.maximum(y1, y2), np.minimum(y1+h1, y2+h2)
+        inter = np.maximum(x2-x1, 0) * np.maximum(y2-y1, 0)
+        union = w1*h1 + w2*h2 - inter
+        ious = inter / union
+        return ious
 
     hoa_root = '/home/skynet/Zhifan/datasets/epic/hoa/'
     mask_fmt = '/media/skynet/DATA/Datasets/visor-dense/interpolations/%s/%s_frame_%010d.png'  # % (vid, vid, frame)
@@ -482,6 +525,7 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
     hos_v3 = list(filter(is_valid, [ClipInfo(**v) for v in hos_v3]))
     all_boxes = dict()
 
+    os.makedirs('/home/skynet/Zhifan/ihoi/outputs/clip_boxes_videos', exist_ok=True)
     for clip in tqdm.tqdm(hos_v3):
         vid = clip.vid
         start = clip.start
@@ -489,6 +533,8 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
         side = clip.side
         cat = clip.cat
         cid = data_mapping[vid][clip.visor_name]  # original name
+        if os.path.exists(f'/home/skynet/Zhifan/ihoi/outputs/clip_boxes_videos/{vid}_{start}_{end}.mp4'):
+            continue
         df = epichoa.load_video_hoa(vid, hoa_root=hoa_root)
         vid_boxes = all_boxes.get(vid, dict())
         frames = []
@@ -499,23 +545,57 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
             obj_mask = np.where(mask == cid, cid, 0).astype(np.uint8)
             boxes = boxes_from_mask(obj_mask)
             epic_frame = mapper(vid, frame)  # mapping from visor frame to epic frame, b.c. hoa is in EPIC
-            hand_box = row2xywh(df[
+
+            if len(boxes) == 0:  # No object mask -> the Model should skip this frame
+                if gen_videos:
+                    image = image_fmt % ( locator.locate(vid, frame), vid, frame)
+                    image = Image.open(image)
+                    frames.append(img)
+                frame_boxes = vid_boxes.get(frame, dict())
+                frame_boxes[side] = None
+                frame_boxes[cat] = None
+                vid_boxes[frame] = frame_boxes
+                continue
+
+            hand_entries = df[(df.frame == epic_frame) & (df.det_type == 'hand') & (df.side == side)]
+            if len(hand_entries) == 0:  # Put None to hand_box to indicate model skip this frame
+                if gen_videos:
+                    image = image_fmt % ( locator.locate(vid, frame), vid, frame)
+                    image = Image.open(image)
+                    img = odlib.draw_bboxes_image_array(image, obj_box[None], color='purple')
+                    frames.append(img)
+                frame_boxes = vid_boxes.get(frame, dict())
+                frame_boxes[side] = None
+                frame_boxes[cat] = obj_box
+                vid_boxes[frame] = frame_boxes
+                continue
+
+            det_hand_box = row2xywh(df[
                 (df.frame == epic_frame) & (df.det_type == 'hand') & (df.side == side)].iloc[0])
-            hand_box = hand_box / (EPIC_HOA_SIZE * 2) * (VISOR_SIZE * 2)
+            det_hand_box = det_hand_box / (EPIC_HOA_SIZE * 2) * (VISOR_SIZE * 2)
             hand_name = ('left hand' if 'left' in side else 'right hand')
             hid = data_mapping[vid][hand_name]
             hand_mask = np.where(mask == hid, hid, 0).astype(np.uint8)
-            hand_box = compute_hand_box(hand_box, hand_mask, hid)
+            hand_box = compute_hand_box(det_hand_box, hand_mask, hid)
+            hand_box = hand_box if hand_box is not None else det_hand_box  # Handle no hand_mask corner case
+
             """ Only keep the box that is closest to hand """
-            min_dst = np.inf
-            min_idx = 0
-            for bi in range(len(boxes)):
-                dst = box_dist(boxes[bi], hand_box)
-                if box_dist(boxes[bi], hand_box) < min_dst:
-                    min_idx = bi
-                    min_dst = dst
-            # TODO: obj box also reference hoa?
+            det_obj_entries = df[(df.frame == epic_frame) & (df.det_type == 'object')]
+            if len(det_obj_entries) == 1:
+                det_obj_box = row2xywh(det_obj_entries.iloc[0])
+                det_obj_box = det_obj_box / (EPIC_HOA_SIZE * 2) * (VISOR_SIZE * 2)
+                ious = compute_box_iou(det_obj_box[None], boxes)
+                min_idx = np.argmax(ious)
+            else:
+                min_dst = np.inf
+                min_idx = 0
+                for bi in range(len(boxes)):
+                    dst = box_dist(boxes[bi], hand_box)
+                    if box_dist(boxes[bi], hand_box) < min_dst:
+                        min_idx = bi
+                        min_dst = dst
             obj_box = boxes[min_idx]
+
             if gen_videos:
                 image = image_fmt % ( locator.locate(vid, frame), vid, frame)
                 image = Image.open(image)
@@ -531,7 +611,7 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
         if gen_videos:
             seq = editor.ImageSequenceClip(list(map(np.asarray, frames)), fps=15)
             seq.write_videofile(
-                f'/home/skynet/Zhifan/ihoi/outputs/tmp/{vid}_{start}_{end}.mp4', verbose=False, logger=None)
+                f'/home/skynet/Zhifan/ihoi/outputs/clip_boxes_videos/{vid}_{start}_{end}.mp4', verbose=False, logger=None)
     io.write_pickle(all_boxes, '/home/skynet/Zhifan/ihoi/weights/v3_clip_boxes.pkl')
 
 
