@@ -9,7 +9,9 @@ hydra:
         dir: outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
 dataset:
-    image_sets: '/home/skynet/Zhifan/data/epic_analysis/gt_clips.json'
+    version: 'v3'  # 'v2'
+    # image_sets: '/home/skynet/Zhifan/data/epic_analysis/gt_clips.json'
+    image_sets: '/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_progress.json'
     sample_frames: 30
 
 preprocess:

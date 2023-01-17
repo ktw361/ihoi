@@ -136,6 +136,7 @@ class DataElement(NamedTuple):
     hand_masks: torch.Tensor 
     object_masks: torch.Tensor 
     cat: str
+    global_camera: BatchCameraManager
 
 
 class EpicClipDatasetV3(Dataset):
@@ -248,19 +249,14 @@ class EpicClipDatasetV3(Dataset):
         plt.tight_layout()
         return fig
 
-    def get_camera(self, index=-1) -> BatchCameraManager:
+    def _get_camera(self) -> CameraManager:
         global_cam = CameraManager(
             # fx=1050, fy=1050, cx=960, cy=540,
             fx=1050, fy=1050, cx=1280, cy=0,
             img_h=1080, img_w=1920)
         new_w, new_h = self.image_size
         global_cam = global_cam.resize(new_h=new_h, new_w=new_w)
-        info = self.data_infos[index]
-        bsize = info.end - info.start + 1
-        if self.sample_frames > 0:
-            bsize = min(self.sample_frames, bsize)
-        batch_global_cam = global_cam.repeat(bsize, device='cpu')
-        return batch_global_cam
+        return global_cam
     
     def _keep_frame_with_boxes(self, vid, start, end, side, cat) -> List[int]:
         """ 
@@ -270,9 +266,10 @@ class EpicClipDatasetV3(Dataset):
         vid_boxes = self.ho_boxes[vid]
         valid_frames = []
         for frame in range(start, end+1):
-            if side not in vid_boxes[frame]:
+            frame_boxes = vid_boxes[frame]
+            if side not in frame_boxes or frame_boxes[side] is None:
                 continue
-            if cat not in vid_boxes[frame]:
+            if cat not in frame_boxes or frame_boxes[cat] is None:
                 continue
             valid_frames.append(frame)
         return valid_frames
@@ -348,6 +345,9 @@ class EpicClipDatasetV3(Dataset):
         hand_masks = torch.as_tensor(hand_masks)
         object_masks = torch.as_tensor(object_masks)
 
+        global_cam = self._get_camera()
+        batch_global_cam = global_cam.repeat(len(frames), device='cpu')
+
         element = DataElement(
             images=images,
             hand_bbox_dicts=hand_bbox_dicts,
@@ -355,7 +355,8 @@ class EpicClipDatasetV3(Dataset):
             obj_bboxes=obj_bbox_arrs,
             hand_masks=hand_masks,
             object_masks=object_masks,
-            cat=cat
+            cat=cat,
+            global_camera=batch_global_cam
         )
         return element
 

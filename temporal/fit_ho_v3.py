@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from datasets.epic_clip import EpicClipDataset
+from datasets.epic_clip_v3 import EpicClipDatasetV3
 from homan.ho_forwarder_v2 import HOForwarderV2Vis
 from homan.utils.geometry import rot6d_to_matrix
 from nnutils.handmocap import (
@@ -25,9 +26,14 @@ from temporal.utils import init_6d_obj_pose_v2
 @hydra.main(config_path='../config', config_name='conf')
 def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
-    dataset = EpicClipDataset(
-        image_sets=cfg.dataset.image_sets,
-        sample_frames=cfg.dataset.sample_frames)
+    if cfg.dataset.version == 'v2':
+        dataset = EpicClipDataset(
+            image_sets=cfg.dataset.image_sets,
+            sample_frames=cfg.dataset.sample_frames)
+    elif cfg.dataset.version == 'v3':
+        dataset = EpicClipDatasetV3(
+            image_sets=cfg.dataset.image_sets,
+            sample_frames=cfg.dataset.sample_frames)
 
     obj_loader = OBJLoader()
     hand_predictor = get_handmocap_predictor()
@@ -53,8 +59,8 @@ def fit_scene(dataset,
     """
     device = 'cuda'
     info = dataset.data_infos[index]
-    images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat = dataset[index]
-    global_cam = dataset.get_camera(index)
+    images, hand_bbox_dicts, side, obj_bboxes, \
+        hand_masks, obj_masks, cat, global_cam = dataset[index]
 
     """ Process all hands """
     mocap_predictions = []
@@ -112,7 +118,10 @@ def fit_scene(dataset,
     Step 1. Interpolate pca_pose
     Step 2. Optimize hand_mask
     """
-    fmt = f'{info.vid}_{info.gt_frame}_%s'
+    if cfg.dataset.version == 'v2':
+        fmt = f'{info.vid}_{info.gt_frame}_%s'
+    elif cfg.dataset.version == 'v3':
+        fmt = f'{info.vid}_{info.start}_{info.end}_%s'
     # homan.render_grid(obj_idx=-1, with_hand=False, low_reso=False).savefig(fmt % 'input')
     # homan.render_grid(obj_idx=-1, with_hand=True, low_reso=False).savefig(fmt % 'raw')
     print("Optimize hand")
