@@ -142,7 +142,7 @@ class EpicClipDatasetV3(Dataset):
 
     def __init__(self,
                  image_sets='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_progress.json',
-                 all_boxes='./weights/v3_clip_boxes.pkl',
+                 all_boxes='/home/skynet/Zhifan/ihoi/weights/v3_clip_boxes.pkl',
                  cat_data_mapping='/media/skynet/DATA/Datasets/visor-dense/meta_infos/data_mapping.json',
                  image_size=VISOR_SIZE,
                  hand_expansion=0.4,
@@ -261,6 +261,21 @@ class EpicClipDatasetV3(Dataset):
             bsize = min(self.sample_frames, bsize)
         batch_global_cam = global_cam.repeat(bsize, device='cpu')
         return batch_global_cam
+    
+    def _keep_frame_with_boxes(self, vid, start, end, side, cat) -> List[int]:
+        """ 
+        Returns:
+            a list of frames in which both obj and hand box are present
+        """
+        vid_boxes = self.ho_boxes[vid]
+        valid_frames = []
+        for frame in range(start, end+1):
+            if side not in vid_boxes[frame]:
+                continue
+            if cat not in vid_boxes[frame]:
+                continue
+            valid_frames.append(frame)
+        return valid_frames
 
     def __getitem__(self, index):
         """
@@ -278,17 +293,21 @@ class EpicClipDatasetV3(Dataset):
         info = self.data_infos[index]
         vid, cat, visor_name, side, start, end = \
             info.vid, info.cat, info.visor_name, info.side, info.start, info.end
-        if self.sample_frames < 0 and end - start > 100:
-            raise NotImplementedError(f"frames more than 100 : {end - start}.")
+
+        valid_frames = self._keep_frame_with_boxes(vid, start, end, side, cat)
+        if self.sample_frames < 0 and len(valid_frames) > 100:
+            raise NotImplementedError(f"frames more than 100 : {len(valid_frames)}.")
+        elif self.sample_frames < 0 or (len(valid_frames) < self.sample_frames):
+            frames = valid_frames
+        else:
+            frame_indices = [v for v in np.linspace(0, len(valid_frames)-1, num=self.sample_frames, dtype=int)]
+            frames = [valid_frames[i] for i in frame_indices]
+
         images = []
         hand_bbox_dicts = []
         obj_bbox_arrs = []
         object_masks = []
         hand_masks = []
-        if self.sample_frames < 0 or (end-start+1 < self.sample_frames):
-            frames = range(start, end+1)
-        else:
-            frames = np.linspace(start, end, num=self.sample_frames, dtype=int)
 
         _side = 'left hand' if 'left' in side else 'right hand'
         side_id = self.cat_data_mapping[vid][_side]
@@ -342,7 +361,7 @@ class EpicClipDatasetV3(Dataset):
 
 
 def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_progress.json',
-                   gen_videos=True):
+                   gen_videos=False):
 
     from PIL import Image
     from moviepy import editor
@@ -533,8 +552,8 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
         side = clip.side
         cat = clip.cat
         cid = data_mapping[vid][clip.visor_name]  # original name
-        if os.path.exists(f'/home/skynet/Zhifan/ihoi/outputs/clip_boxes_videos/{vid}_{start}_{end}.mp4'):
-            continue
+        # if os.path.exists(f'/home/skynet/Zhifan/ihoi/outputs/clip_boxes_videos/{vid}_{start}_{end}.mp4'):
+        #     continue
         df = epichoa.load_video_hoa(vid, hoa_root=hoa_root)
         vid_boxes = all_boxes.get(vid, dict())
         frames = []
