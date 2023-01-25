@@ -122,7 +122,8 @@ def fit_scene(dataset,
         fmt = f'{info.vid}_{info.gt_frame}_%s'
     elif cfg.dataset.version == 'v3':
         fmt = f'{info.vid}_{info.start}_{info.end}_%s'
-    # homan.render_grid(obj_idx=-1, with_hand=False, low_reso=False).savefig(fmt % 'input')
+    homan.render_grid(obj_idx=-1, with_hand=False, 
+                      low_reso=False, overlay_gt=True).savefig(fmt % 'input.png')
     # homan.render_grid(obj_idx=-1, with_hand=True, low_reso=False).savefig(fmt % 'raw')
     print("Optimize hand")
     homan = smooth_hand_pose(homan, lr=0.1)

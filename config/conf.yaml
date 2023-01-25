@@ -2,7 +2,7 @@ description: ???
 
 # Running arguments
 index: ???
-save_video: False
+save_video: True
 
 hydra:
     sweep:

@@ -180,7 +180,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                            scale_inits,
                            weights=None,
                            save_grid: str = None,
-                           cfg = None):
+                           cfg = None) -> HOForwarderV2Vis:
     """
     Args:
         save_grid: str, fname to save the optimization process

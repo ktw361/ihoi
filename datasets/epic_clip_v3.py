@@ -117,15 +117,21 @@ class PairLocator:
 
 class ClipInfo(NamedTuple):
     vid: str
-    gt_frames: str
+    gt_frames: List[int]
     cat: str
     visor_name: str
+    side: str  # 'left' or 'right'
     st_bound: int
     ed_bound: int
-    side: str
-    start: int
+    start: int 
     end: int
-    comments: str
+
+    status: str  # {'UNLABELED', 'NOTFOUND_MANIP', 'NOTFOUND_OCC', 'FOUND'}
+    cad: int # 0 or 1
+    hand_occ: int # 0 or 1, not annotated
+    obj_occ: int # 0 or 1
+    bad_obj_mask: int # 0 or 1
+    comments: str  # other possible comments, currently unused
 
 
 class DataElement(NamedTuple):
@@ -191,14 +197,8 @@ class EpicClipDatasetV3(Dataset):
         with open(image_sets) as fp:
             infos = json.load(fp)
 
-        def is_valid(info: ClipInfo):
-            if 'manip' in info.comments:
-                return False
-            if 'short' in info.comments:
-                return False
-            if 'del' in info.comments:
-                return False
-            return info.start != -1 and info.end != -1
+        def is_valid(info: dict):
+            return info.status == 'FOUND'
 
         infos = [ClipInfo(**v) for v in infos]
         return list(filter(is_valid, infos))
@@ -534,6 +534,7 @@ def generate_boxes(hos_v3='/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_p
     image_fmt = '/media/skynet/DATA/Datasets/visor-dense/480p/%s/%s_frame_%010d.jpg'  # % (folder, vid, frame)
 
     hos_v3 = io.read_json(hos_v3)
+    raise NotImplementedError
     def is_valid(info: ClipInfo):
         if 'manip' in info.comments:
             return False
