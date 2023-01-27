@@ -6,7 +6,7 @@ save_optim_video: True      # Save optimization video
 
 # Running arguments
 index_from: 0
-index_to: 65535
+index_to: 99999999
 
 hydra:
     sweep:
