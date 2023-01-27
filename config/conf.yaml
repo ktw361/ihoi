@@ -1,8 +1,12 @@
 description: ???
 
+# Debug
+save_action_video: True     # Save action video, compare with original
+save_optim_video: True      # Save optimization video
+
 # Running arguments
-index: ???
-save_video: True
+index_from: 0
+index_to: 65535
 
 hydra:
     sweep:

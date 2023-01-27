@@ -1,9 +1,9 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
-import os
 import tqdm
 import numpy as np
 import torch
+from moviepy import editor
 import matplotlib.pyplot as plt
 from datasets.epic_clip import EpicClipDataset
 from datasets.epic_clip_v3 import EpicClipDatasetV3
@@ -21,6 +21,7 @@ from nnutils import image_utils
 from temporal.optim_plan import optimize_hand, smooth_hand_pose
 from temporal.optim_plan import reinit_sample_optimize
 from temporal.utils import init_6d_obj_pose_v2
+from temporal.visualize import make_compare_video
 
 
 @hydra.main(config_path='../config', config_name='conf')
@@ -38,14 +39,8 @@ def main(cfg: DictConfig) -> None:
     obj_loader = OBJLoader()
     hand_predictor = get_handmocap_predictor()
 
-    if cfg.index >= 0:
-        fit_scene(dataset, hand_predictor, obj_loader,
-                  cfg.index, cfg=cfg)
-        return
-
-    for index in tqdm.trange(len(dataset)):
-        fit_scene(dataset, hand_predictor, obj_loader,
-                  index, cfg=cfg)
+    for index in range(cfg.index_from, min(cfg.index_to, len(dataset))):
+        fit_scene(dataset, hand_predictor, obj_loader, index, cfg=cfg)
 
 
 def fit_scene(dataset,
@@ -122,8 +117,8 @@ def fit_scene(dataset,
         fmt = f'{info.vid}_{info.gt_frame}_%s'
     elif cfg.dataset.version == 'v3':
         fmt = f'{info.vid}_{info.start}_{info.end}_%s'
-    homan.render_grid(obj_idx=-1, with_hand=False, 
-                      low_reso=False, overlay_gt=True).savefig(fmt % 'input.png')
+    homan.render_grid(obj_idx=-1, with_hand=False,
+                      low_reso=False, overlay_gt=True).savefig(fmt % 'input.png')  # TODO: dump mask
     # homan.render_grid(obj_idx=-1, with_hand=True, low_reso=False).savefig(fmt % 'raw')
     print("Optimize hand")
     homan = smooth_hand_pose(homan, lr=0.1)
@@ -158,7 +153,7 @@ def fit_scene(dataset,
     """
     Step 4. Optimize both hand+object mask using best object pose
     """
-    save_grid = (fmt % 'optim.mp4') if cfg.save_video else None
+    save_grid = (fmt % 'optim.mp4') if cfg.save_optim_video else None
     homan, _, results = reinit_sample_optimize(
         homan, rotation_inits, translation_inits, scale_inits,
         save_grid=save_grid,
@@ -170,6 +165,11 @@ def fit_scene(dataset,
     homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
     torch.save(homan, (fmt % 'model.pth'))
     torch.save([list(v) for v in results], (fmt % 'results.pth'))
+
+    if cfg.save_action_video:
+        frames = make_compare_video(homan, global_cam, global_images=images)
+        action_cilp = editor.ImageSequenceClip(frames, fps=5)
+        action_cilp.write_videofile(fmt % 'action.mp4')
 
 
 if __name__ == '__main__':

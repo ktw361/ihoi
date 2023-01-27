@@ -1060,20 +1060,21 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
                      **mesh_kwargs) -> np.ndarray:
         """ returns: (H, W, 3) """
         if not with_hand:
-            return self.ihoi_img_patch[scene_idx]
-        mhand, mobj = self.get_meshes(
-            scene_idx=scene_idx, obj_idx=obj_idx, **mesh_kwargs)
-        img = projection.perspective_projection_by_camera(
-            [mhand, mobj],
-            CameraManager.from_nr(
-                self.camintr.detach().cpu().numpy()[scene_idx], self.vis_rend_size),
-            method=dict(
-                name='pytorch3d',
-                coor_sys='nr',
-                in_ndc=False
-            ),
-            image=self.ihoi_img_patch[scene_idx],
-        )
+            img = self.ihoi_img_patch[scene_idx] / 255
+        else:
+            mhand, mobj = self.get_meshes(
+                scene_idx=scene_idx, obj_idx=obj_idx, **mesh_kwargs)
+            img = projection.perspective_projection_by_camera(
+                [mhand, mobj],
+                CameraManager.from_nr(
+                    self.camintr.detach().cpu().numpy()[scene_idx], self.vis_rend_size),
+                method=dict(
+                    name='pytorch3d',
+                    coor_sys='nr',
+                    in_ndc=False
+                ),
+                image=self.ihoi_img_patch[scene_idx],
+            )
 
         if overlay_gt:
             all_mask = np.zeros_like(img, dtype=np.float32)
