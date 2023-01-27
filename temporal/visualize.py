@@ -71,6 +71,6 @@ def make_compare_video(homan: HOForwarderV2Vis,
             obj_idx=0,
             with_hand=True,
             overlay_gt=False)
-        img = np.vstack([global_images[i] / 255, img_mesh])
+        img = np.vstack([global_images[i], img_mesh * 255])
         frames.append(img)
     return frames
