@@ -3,6 +3,7 @@ from omegaconf import DictConfig, OmegaConf
 import tqdm
 import numpy as np
 import torch
+import logging
 from moviepy import editor
 import matplotlib.pyplot as plt
 from datasets.epic_clip import EpicClipDataset
@@ -27,6 +28,8 @@ from temporal.visualize import make_compare_video
 @hydra.main(config_path='../config', config_name='conf')
 def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
+    log = logging.getLogger(__name__)
+
     if cfg.dataset.version == 'v2':
         dataset = EpicClipDataset(
             image_sets=cfg.dataset.image_sets,
@@ -39,8 +42,13 @@ def main(cfg: DictConfig) -> None:
     obj_loader = OBJLoader()
     hand_predictor = get_handmocap_predictor()
 
-    for index in range(cfg.index_from, min(cfg.index_to, len(dataset))):
-        fit_scene(dataset, hand_predictor, obj_loader, index, cfg=cfg)
+    for index in tqdm.trange(cfg.index_from, min(cfg.index_to, len(dataset))):
+        try:
+            fit_scene(dataset, hand_predictor, obj_loader, index, cfg=cfg)
+            log.info(f"Succeed at index [{index}]: {dataset.data_infos[index]}")
+        except Exception as e:
+            log.info(f"Failed at index [{index}]: {dataset.data_infos[index]}. Reason: {e}")
+            continue
 
 
 def fit_scene(dataset,
@@ -117,9 +125,7 @@ def fit_scene(dataset,
         fmt = f'{info.vid}_{info.gt_frame}_%s'
     elif cfg.dataset.version == 'v3':
         fmt = f'{info.vid}_{info.start}_{info.end}_%s'
-    homan.render_grid(obj_idx=-1, with_hand=False,
-                      low_reso=False, overlay_gt=True).savefig(fmt % 'input.png')  # TODO: dump mask
-    # homan.render_grid(obj_idx=-1, with_hand=True, low_reso=False).savefig(fmt % 'raw')
+
     print("Optimize hand")
     homan = smooth_hand_pose(homan, lr=0.1)
     homan = optimize_hand(homan, verbose=False)
@@ -150,6 +156,9 @@ def fit_scene(dataset,
         scale_init=scale_inits)
     homan.set_obj_target(obj_mask_patch)
 
+    homan.render_grid(obj_idx=0, with_hand=False,
+                      low_reso=False, overlay_gt=True).savefig(fmt % 'input.png')
+
     """
     Step 4. Optimize both hand+object mask using best object pose
     """
@@ -160,7 +169,7 @@ def fit_scene(dataset,
         cfg=cfg.optim)
 
     fig = homan.render_grid(obj_idx=0, with_hand=True, low_reso=False)
-    fig.savefig(fmt % 'optim.png')
+    fig.savefig(fmt % 'output.png')
     plt.close(fig)
     homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
     torch.save(homan, (fmt % 'model.pth'))
