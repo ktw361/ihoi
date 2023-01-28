@@ -3,6 +3,7 @@ import gc
 import numpy as np
 import cv2
 
+from argparse import ArgumentParser
 from PIL import Image
 from moviepy import editor
 import bisect, re
@@ -15,12 +16,36 @@ from datasets.epic_clip_v3 import PairLocator, ClipInfo
 from libzhifan import odlib
 odlib.setup('xywh')
 
+"""
+generates a cache
+all_boxes: dict
+- vid: dict
+    - frame: dict
+        - side: np.ndarray [4] or None
+        - cat: np.ndarray [4] or None
+    If a frame has been processed, all_boxes[vid][frame] must exist.
+"""
+
+
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument('input', type=str, help='Input file')
+    parser.add_argument('--generate_videos', action='store_true', help='Generate video')
+    parser.add_argument('--output', default='/home/skynet/Zhifan/ihoi/weights/v3_clip_boxes.pkl')
+    parser.add_argument('--amend', action='store_true', help='Amend the output file instead of restarting')
+    parser.add_argument('--index', default=None, type=int)
+    args = parser.parse_args()
+    return args
+
 
 class Mapper:
     """ Mapping from VISOR frame to EPIC frame """
 
-    def __init__(self,
-                mapping='/home/skynet/Zhifan/data/epic_analysis/resources/mapping_visor_to_epic.json'):
+    def __init__(self, mapping):
+        """
+        Args:
+            mapping: e.g. '/home/skynet/Zhifan/data/epic_analysis/resources/mapping_visor_to_epic.json'
+        """
         mapping = io.read_json(mapping)
         cvt = lambda x : int(re.search('\d{10}', x).group(0))
         vids = mapping.keys()
@@ -173,24 +198,26 @@ def compute_box_iou(box1: np.ndarray, boxes: np.ndarray) -> np.ndarray:
 
 
 def generate_boxes(hos_v3,
-                   gen_videos=False):
+                   output,
+                   gen_videos=False,
+                   amend=True,
+                   index: int = None):
     hoa_root = '/home/skynet/Zhifan/datasets/epic/hoa/'
     mask_fmt = '/media/skynet/DATA/Datasets/visor-dense/interpolations/%s/%s_frame_%010d.png'  # % (vid, vid, frame)
     data_mapping = io.read_json('/media/skynet/DATA/Datasets/visor-dense/meta_infos/data_mapping.json')
-    mapper = Mapper()
+    mapper = Mapper(mapping='/home/skynet/Zhifan/data/epic_analysis/resources/mapping_visor_to_epic.json')
     locator = PairLocator()
     image_fmt = '/media/skynet/DATA/Datasets/visor-dense/480p/%s/%s_frame_%010d.jpg'  # % (folder, vid, frame)
 
     hos_v3 = io.read_json(hos_v3)
-    # raise NotImplementedError
-    def is_valid(info: ClipInfo):
-        if info.status == 'FOUND':
-            return True
-        else:
-            return False
-    hos_v3 = list(filter(is_valid, [ClipInfo(**v) for v in hos_v3]))
-    hos_v3 = hos_v3[50:]
-    all_boxes = dict()
+    hos_v3 = [ClipInfo(**v) for v in hos_v3]
+    hos_v3 = [v for v in hos_v3 if v.status == 'FOUND']
+    if index is not None:
+        hos_v3 = hos_v3[index:index+1]
+    if amend:
+        all_boxes = io.read_pickle(output)
+    else:
+        all_boxes = dict()
 
     os.makedirs('/home/skynet/Zhifan/ihoi/outputs/tmp/clip_boxes_videos', exist_ok=True)
     for clip in tqdm.tqdm(hos_v3):
@@ -200,14 +227,26 @@ def generate_boxes(hos_v3,
         side = clip.side
         cat = clip.cat
         cid = data_mapping[vid][clip.visor_name]  # original name
-        # if os.path.exists(f'/home/skynet/Zhifan/ihoi/outputs/clip_boxes_videos/{vid}_{start}_{end}.mp4'):
-        #     continue
-        df = epichoa.load_video_hoa(vid, hoa_root=hoa_root)
+
         vid_boxes = all_boxes.get(vid, dict())
         frames = []
+
         if end < start:
             print('Error clip: ', clip)
             continue
+
+        # If amend and all start-end frames are already computed, skip
+        if amend:
+            computed = True
+            for frame in range(start, end+1):
+                if not frame in vid_boxes:
+                    computed = False
+                    break
+            if computed:
+                continue
+
+        df = epichoa.load_video_hoa(vid, hoa_root=hoa_root)
+
         for frame in range(start, end+1):
             mask = mask_fmt % (vid, vid, frame)
             mask = Image.open(mask).convert('P')
@@ -284,12 +323,13 @@ def generate_boxes(hos_v3,
                 f'/home/skynet/Zhifan/ihoi/outputs/tmp/clip_boxes_videos/{vid}_{start}_{end}.mp4', verbose=False, logger=None)
             del seq
             gc.collect()
-    io.write_pickle(all_boxes, '/home/skynet/Zhifan/ihoi/weights/v3_clip_boxes.pkl')
+        io.write_pickle(all_boxes, output)
 
 
 if __name__ == '__main__':
-    from argparse import ArgumentParser
-    parser = ArgumentParser()
-    parser.add_argument('input', type=str, help='Input file')
-    args = parser.parse_args()
-    generate_boxes(hos_v3=args.input, gen_videos=True)
+    args = parse_args()
+    generate_boxes(hos_v3=args.input, 
+                   output=args.output,
+                   gen_videos=args.generate_videos,
+                   amend=args.amend,
+                   index=args.index)
