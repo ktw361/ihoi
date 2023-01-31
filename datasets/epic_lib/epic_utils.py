@@ -108,7 +108,8 @@ def read_v3_mask_with_occlusion(path: str,
                                 cid: int,
                                 crop_hand_mask=False,
                                 crop_hand_expand=0.0,
-                                hand_box: np.ndarray = None):
+                                hand_box: np.ndarray = None,
+                                occlude_all=True):
     """ For HOS_V3 mask
     Args:
         path: <path_to_frame_xxx.png>
@@ -117,6 +118,7 @@ def read_v3_mask_with_occlusion(path: str,
         crop_hand_mask: whether to crop hand mask to hand_box region
         crop_hand_expand: expand ratio
         hand_box: (4,)
+        occlude_all: if True, all other things will be -1, instead of 0
     
     Returns:
         mask_hand, mask_obj: np.ndarray (H, W) int32
@@ -127,7 +129,6 @@ def read_v3_mask_with_occlusion(path: str,
     mask_hand = np.zeros_like(mask)
     mask_obj = np.zeros_like(mask)
     mask_hand[mask == side_id] = 1
-    mask_obj[mask == cid] = 1
     if crop_hand_mask:
         x0, y0, bw, bh = hand_box
         x1, y1 = x0 + bw, y0 + bh
@@ -146,7 +147,16 @@ def read_v3_mask_with_occlusion(path: str,
         mask_hand_crop[mask_obj == 1] = -1
         mask_hand = mask_hand_crop
     # This has to happen after cropping
-    mask_obj[mask_hand == 1] = -1
+    if occlude_all:
+        unique_ids = np.unique(np.asarray(mask))
+        for c in unique_ids:
+            if c == 0:
+                continue
+            mask_obj[mask == c] = -1
+    else:
+        mask_obj[mask_hand == 1] = -1
+    mask_obj[mask == cid] = 1
+        
     return mask_hand, mask_obj
 
 
