@@ -1,6 +1,4 @@
-weights/*
 .ipynb_checkpoints/
-data/
 .vscode/
 *.sublime-workspace
 .idea/
@@ -11,9 +9,14 @@ __pycache__/
 *.xml
 *.fuse*
 CC/data
+.env
+
+runs/
+externals/
 outputs/
 outputs
-externals/
-.env
-runs/
+data/
+
+weights/*
 !weights/contact_regions.json
+epic_analysis
