@@ -180,7 +180,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                            scale_inits,
                            weights=None,
                            save_grid: str = None,
-                           cfg = None) -> HOForwarderV2Vis:
+                           cfg = None):
     """
     Args:
         save_grid: str, fname to save the optimization process
@@ -194,6 +194,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
     temperature = cfg.temperature
     ratio = cfg.ratio
     vis_interval = cfg.vis_interval
+    criterion = cfg.criterion
 
     ElementType = namedtuple("ElementType", "mask inside close R t s")
 
@@ -270,8 +271,13 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             [v*255 for v in out_frames], fps=15).write_videofile(save_grid)
 
     # write-back best
+    # final_score = \
+    #     torch.softmax(torch.as_tensor([-v.mask for v in results]), 0) + \
+    #     torch.softmax(torch.as_tensor([-v.inside for v in results]), 0) + \
+    #     torch.softmax(torch.as_tensor([-v.close for v in results]), 0)
     final_score = \
-        torch.softmax(torch.as_tensor([-v.inside for v in results]), 0)
+        torch.softmax(torch.as_tensor([- getattr(v, criterion) for v in results]), 0)
+
     idx = final_score.argmax()
     R, t, s = results[idx].R, results[idx].t, results[idx].s
     homan.set_obj_transform(

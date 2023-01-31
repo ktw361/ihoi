@@ -168,9 +168,6 @@ def fit_scene(dataset,
         save_grid=save_grid,
         cfg=cfg.optim)
 
-    fig = homan.render_grid(obj_idx=0, with_hand=True, low_reso=False)
-    fig.savefig(fmt % 'output.png')
-    plt.close(fig)
     homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
     torch.save(homan, (fmt % 'model.pth'))
     torch.save([list(v) for v in results], (fmt % 'results.pth'))
@@ -179,6 +176,19 @@ def fit_scene(dataset,
         frames = make_compare_video(homan, global_cam, global_images=images)
         action_cilp = editor.ImageSequenceClip(frames, fps=5)
         action_cilp.write_videofile(fmt % 'action.mp4')
+
+    for criterion in ['mask', 'inside', 'close']:
+        final_score = \
+            torch.softmax(torch.as_tensor([- getattr(v, criterion) for v in results]), 0)
+        idx = final_score.argmax()
+        R, t, s = results[idx].R, results[idx].t, results[idx].s
+        homan.set_obj_transform(
+            translations_object=t,
+            rotations_object=R,
+            scale_object=s)
+        fig = homan.render_grid(obj_idx=0, with_hand=True, low_reso=False)
+        fig.savefig(fmt % f'output_{criterion}.png')
+        plt.close(fig)
 
 
 if __name__ == '__main__':
