@@ -210,6 +210,15 @@ class EpicClipDatasetV3(Dataset):
 
     def __len__(self):
         return len(self.data_infos)
+    
+    def locate_index_from_output(self, name):
+        """ e.g. name = P01_09_169454_169515_action """
+        arr = name.split('_')
+        vid = '_'.join(arr[:2])
+        start, end = int(arr[2]), int(arr[3])
+        search = [i for i, v in enumerate(self.data_infos)
+                  if v.vid == vid and v.start == start and v.end == end]
+        return search[0]
 
     def _get_hand_box(self, vid, frame_idx, side, expand=True):
         hand_box = self.ho_boxes[vid][frame_idx][side]
