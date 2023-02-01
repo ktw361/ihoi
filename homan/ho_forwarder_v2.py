@@ -326,9 +326,6 @@ class HOForwarderV2(nn.Module):
         else:
             raise ValueError("scale_mode not understood")
 
-        if return_part:
-            verts_obj = self.verts_object_og[self.obj_part_verts, :]
-        else:
         verts_obj = self.verts_object_og
         verts_obj = verts_obj.view(1, 1, -1, 3).expand(
             self.bsize, self.num_obj, -1, -1)
@@ -399,6 +396,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         """ Interpolation loss for hand rotation """
         device = self.rotations_hand.device
         rotmat = self.rot_mat_hand
+        # with torch.no_grad():
         rot_mid = roma.rotmat_slerp(
             rotmat[2:], rotmat[:-2],
             torch.as_tensor([0.5], device=device))[0]
