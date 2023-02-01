@@ -217,12 +217,17 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             scale_inits[transform_indices,...])
         homan._check_shape_object(homan.num_obj)
 
+        params = [
+            homan.rotations_object,  # (1,)
+            homan.translations_object,
+            homan.scale_object,
+        ]
+        if cfg.optimize_hand_wrist:
+            params.append(homan.rotations_hand)
+            params.append(homan.translations_hand)
+
         optimizer = torch.optim.Adam([{
-            'params': [
-                homan.rotations_object,  # (1,)
-                homan.translations_object,
-                homan.scale_object,
-            ],
+            'params': params,
             'lr': lr
         }])
 

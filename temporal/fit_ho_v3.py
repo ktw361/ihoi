@@ -169,8 +169,9 @@ def fit_scene(dataset,
         cfg=cfg.optim)
 
     homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
-    torch.save(homan, (fmt % 'model.pth'))
-    torch.save([list(v) for v in results], (fmt % 'results.pth'))
+    if cfg.save_pth:
+        torch.save(homan, (fmt % 'model.pth'))
+        torch.save([list(v) for v in results], (fmt % 'results.pth'))
 
     if cfg.save_action_video:
         frames = make_compare_video(homan, global_cam, global_images=images)

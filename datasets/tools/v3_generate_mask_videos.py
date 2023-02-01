@@ -65,7 +65,7 @@ class Mapper:
 
 
 def generate_boxes(hos_v3,
-                    sample_frames=30,
+                   sample_frames=30,
                    index: int = None):
     hoa_root = '/home/skynet/Zhifan/datasets/epic/hoa/'
     mask_fmt = '/media/skynet/DATA/Datasets/visor-dense/interpolations/%s/%s_frame_%010d.png'  # % (vid, vid, frame)
@@ -80,7 +80,7 @@ def generate_boxes(hos_v3,
     if index is not None:
         hos_v3 = hos_v3[index:index+1]
 
-    videos_dir = '/home/skynet/Zhifan/ihoi/outputs/tmp/v3_mask_videos'
+    videos_dir = '/home/skynet/Zhifan/ihoi/outputs/tmp/v3_mask_videos_occlude'
     os.makedirs(videos_dir, exist_ok=True)
     for clip in tqdm.tqdm(hos_v3):
         vid = clip.vid
@@ -108,6 +108,11 @@ def generate_boxes(hos_v3,
             hand_name = ('left hand' if 'left' in side else 'right hand')
             hid = data_mapping[vid][hand_name]
             canvas = np.zeros_like(mask_rgb)
+            uniq_ids = np.unique(mask_int)
+            for uid in uniq_ids:
+                if uid == 0:
+                    continue
+                canvas[mask_int==uid, ...] = [128, 128, 128]
             canvas[mask_int==cid, ...] = mask_rgb[mask_int==cid, ...]
             canvas[mask_int==hid, ...] = mask_rgb[mask_int==hid, ...]
 
