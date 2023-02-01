@@ -53,7 +53,7 @@ def main(cfg: DictConfig) -> None:
 
 def fit_scene(dataset,
               hand_predictor,
-              obj_loader,
+              obj_loader: OBJLoader,
               index: int,
               cfg: DictConfig = None):
     """
@@ -155,6 +155,9 @@ def fit_scene(dataset,
         scale_mode=cfg.homan.scale_mode,
         scale_init=scale_inits)
     homan.set_obj_target(obj_mask_patch)
+    if cfg.optim.obj_part_prior:
+        part_v, _ = obj_loader.load_part_by_name(cat)
+        homan.set_obj_part(part_verts=part_v)
 
     homan.render_grid(obj_idx=0, with_hand=False,
                       low_reso=False, overlay_gt=True).savefig(fmt % 'input.png')

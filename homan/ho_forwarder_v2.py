@@ -235,6 +235,14 @@ class HOForwarderV2(nn.Module):
         self.register_buffer(
             "textures_object",
             torch.ones(faces_object.shape[0], 1, 1, 1, 3))
+    
+    def set_obj_part(self, part_verts: List):
+        """ Object Part(s) define the prior contact region on the object surface.
+
+        Args:
+            part_verts: list of int, vertices indices
+        """
+        self.obj_part_verts = part_verts
 
     def set_obj_target(self, target_masks_object: torch.Tensor):
         """
@@ -279,7 +287,7 @@ class HOForwarderV2(nn.Module):
     def rot_mat_obj(self) -> torch.Tensor:
         return rot6d_to_matrix(self.rotations_object)
 
-    def get_verts_object(self, cam_idx=None, transl_gradient_only=False) -> torch.Tensor:
+    def get_verts_object(self, cam_idx=None) -> torch.Tensor:
         """
             V_out = (V_model x R_o2h + T_o2h) x R_hand + T_hand
                   = V x (R_o2h x R_hand) + (T_o2h x R_hand + T_hand)
@@ -318,7 +326,11 @@ class HOForwarderV2(nn.Module):
         else:
             raise ValueError("scale_mode not understood")
 
-        verts_obj = self.verts_object_og.view(1, 1, -1, 3).expand(
+        if return_part:
+            verts_obj = self.verts_object_og[self.obj_part_verts, :]
+        else:
+        verts_obj = self.verts_object_og
+        verts_obj = verts_obj.view(1, 1, -1, 3).expand(
             self.bsize, self.num_obj, -1, -1)
         if self.scale_mode == 'xyz':
             scale = scale.view(1, -1, 1, 3).expand(
@@ -698,7 +710,7 @@ class HOForwarderV2Impl(HOForwarderV2):
     """ Contact regions """
 
     def loss_closeness(self,
-                       v_hand=None, v_obj=None,
+                       v_hand=None, v_obj=None, v_obj_select=None,
                        squared_dist=False,
                        num_priors=8, 
                        reduce_type='avg',
@@ -724,6 +736,9 @@ class HOForwarderV2Impl(HOForwarderV2):
         bsize, num_obj, obj_size = v_hand.size(0), v_obj.size(1), v_obj.size(-2)
         v_obj = v_obj.view(bsize * num_obj, obj_size, 3)  # (B*N, V, 3)
         vn_obj = compute_vert_normals(v_obj, faces=self.faces_object)
+        if v_obj_select is not None:
+            v_obj = v_obj[:, v_obj_select, :]
+            vn_obj = vn_obj[:, v_obj_select, :]
 
         ph_idx = reduce(lambda a, b: a + b, self.contact_regions.verts, [])
         ph = v_hand[:, ph_idx, :]
@@ -757,7 +772,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         return loss
 
     def loss_insideness(self,
-                        v_hand=None, v_obj=None,
+                        v_hand=None, v_obj=None, v_obj_select=None,
                         squared_dist=False,
                         num_nearest_points=3,
                         debug_viz=False):
@@ -769,6 +784,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             Loss = \Avg -1.0 * max(loss_p, 0)
         
         Args:
+            v_obj_select: List of vertices to compute loss
             num_nearest_points: number of nearest K points in hand
 
         Returns:
@@ -779,6 +795,8 @@ class HOForwarderV2Impl(HOForwarderV2):
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         vn_hand = compute_vert_normals(v_hand, faces=self.faces_hand[0])
         v_obj = self.get_verts_object() if v_obj is None else v_obj
+        if v_obj_select is not None:
+            v_obj = v_obj[:, :, v_obj_select, :]
 
         bsize, num_obj, v_obj_size = v_hand.size(0), v_obj.size(1), v_obj.size(-2)
         p_obj = v_obj.view(bsize, num_obj * v_obj_size, 3)  # 
@@ -820,22 +838,26 @@ class HOForwarderV2Impl(HOForwarderV2):
     
     """ system objectives """
     def train_loss(self, cfg, print_metric=False):
+        """ cfg: `optim` section of the config """
         with torch.no_grad():
             v_hand = self.get_verts_hand()[self.sample_indices, ...]
-        v_obj = self.get_verts_object(
-            transl_gradient_only=False)[self.sample_indices, ...]
+        v_obj = self.get_verts_object()[self.sample_indices, ...]
 
         l_obj_dict = self.forward_obj_pose_render(
             v_obj=v_obj)  # (B, N)
         l_obj_mask = l_obj_dict['mask'].sum()
 
+        if cfg.obj_part_prior:
+            v_obj_select = self.obj_part_verts
+        else:
+            v_obj_select = None
         l_inside = self.loss_insideness(
-            v_hand=v_hand, v_obj=v_obj,
+            v_hand=v_hand, v_obj=v_obj, v_obj_select=v_obj_select,
             num_nearest_points=cfg.loss.inside.num_nearest_points)
         l_inside = l_inside.sum()
 
         l_close = self.loss_closeness(
-            v_hand=v_hand, v_obj=v_obj,
+            v_hand=v_hand, v_obj=v_obj, v_obj_select=v_obj_select,
             num_priors=cfg.loss.close.num_priors,
             reduce_type=cfg.loss.close.reduce,
             num_nearest_points=cfg.loss.close.num_nearest_points)

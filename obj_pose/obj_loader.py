@@ -6,6 +6,7 @@ import trimesh
 from typing import NamedTuple
 
 from libzhifan.geometry import SimpleMesh
+from libzhifan import io
 
 
 class MeshHolder(NamedTuple):
@@ -29,6 +30,7 @@ class OBJLoader:
                  obj_models_root='./weights/obj_models',
                  load_simplified=True):
         self.obj_models_root = to_absolute_path(obj_models_root)
+        self.obj_parts_root = to_absolute_path('./weights')
         self.obj_models_cache = dict()
         self.load_simplified = load_simplified
 
@@ -63,3 +65,6 @@ class OBJLoader:
 
         return obj_mesh
 
+    def load_part_by_name(self, name):
+        part = io.read_json(os.path.join(self.obj_parts_root, f"{name}_regions.json"))
+        return part['verts'], part['faces']

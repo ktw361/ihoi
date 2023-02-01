@@ -253,8 +253,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
 
         with torch.no_grad():
             v_hand = homan.get_verts_hand()[homan.sample_indices, ...]
-            v_obj = homan.get_verts_object(
-                transl_gradient_only=False)[homan.sample_indices, ...]
+            v_obj = homan.get_verts_object()[homan.sample_indices, ...]
             mask_score = homan.forward_obj_pose_render()['mask'].sum(0)
             inside_score = homan.loss_insideness(
                 v_hand=v_hand, v_obj=v_obj).sum(0)
