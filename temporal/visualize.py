@@ -2,16 +2,18 @@ from typing import List
 import matplotlib.pyplot as plt
 import numpy as np
 from homan.ho_forwarder_v2 import HOForwarderV2, HOForwarderV2Vis
-from obj_pose.pose_optimizer import PoseOptimizer
 from moviepy import editor
 
 from libzhifan.geometry import visualize_mesh, SimpleMesh
 from libzhifan.geometry import BatchCameraManager
 
 
-def plot_pose_summaries(pose_machine: PoseOptimizer,
+def plot_pose_summaries(pose_machine,
                         pose_idx=0) -> plt.figure:
-    """ homans: list of HO_forwarder """
+    """ homans: list of HO_forwarder 
+    Args:
+        pose_machine: obj_pose.pose_optimizer.PoseOptimizer
+    """
     l = len(pose_machine.global_cam)
     num_cols = 5
     num_rows = (l + num_cols - 1) // num_cols
@@ -31,12 +33,14 @@ def plot_pose_summaries(pose_machine: PoseOptimizer,
     return fig
 
 
-def concat_pose_meshes(pose_machine: PoseOptimizer,
+def concat_pose_meshes(pose_machine,
                        pose_idx=0,
                        obj_file=None):
     """
     Returns a list of SimpleMesh,
     offset each timestep for easier comparison?
+    Args:
+        pose_machine: obj_pose.pose_optimizer.PoseOptimizer
     """
     meshes = []
     l = len(pose_machine.global_cam)
