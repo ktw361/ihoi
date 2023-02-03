@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 from datasets.epic_clip import EpicClipDataset
 from datasets.epic_clip_v3 import EpicClipDatasetV3
 from homan.ho_forwarder_v2 import HOForwarderV2Vis
-from homan.utils.geometry import rot6d_to_matrix
 from nnutils.handmocap import (
     get_handmocap_predictor,
     collate_mocap_hand,
@@ -85,7 +84,7 @@ def fit_scene(dataset,
 
     hand_sz = torch.ones_like(global_cam.fx) * 224
     hand_cam = global_cam.crop(hand_bbox_proc).resize(new_w=hand_sz, new_h=hand_sz)
-    hand_rotation, hand_translation = compute_hand_transform(
+    hand_rotation_6d, hand_translation = compute_hand_transform(
         rot_axisang, pred_hand_pose, pred_camera, side,
         hand_cam=hand_cam)
 
@@ -111,7 +110,7 @@ def fit_scene(dataset,
         ihoi_img_patch=image_patch,
     )
     homan.set_hand_params(
-        rotations_hand=hand_rotation,
+        rotations_hand=hand_rotation_6d,
         translations_hand=hand_translation,
         hand_side=side,
         mano_pca_pose=mano_pca_pose,
@@ -136,20 +135,23 @@ def fit_scene(dataset,
     num_initializations = cfg.optim.num_epochs
 
     with torch.no_grad():
-        rotation_inits, translation_inits, scale_inits = init_6d_obj_pose_v2(
+        rot_init_method = cfg.homan.rot_init_method
+        if cfg.homan.apply_upright_to_bowl and cat == 'bowl':
+            rot_init_method = 'upright'
+        rotation6d_inits, translation_inits, scale_inits = init_6d_obj_pose_v2(
             obj_bboxes, homan.get_verts_hand(), vertices,
             global_cam_mat=global_cam.get_K(), local_cam_mat=ihoi_cam.get_K(),
             num_init=num_initializations,
-            rot_init_method=cfg.homan.rot_init_method,
+            rot_init_method=rot_init_method,
             transl_init_method=cfg.homan.transl_init_method,
             scale_init_method=cfg.homan.scale_init_method,
-            base_rotation=rot6d_to_matrix(homan.rotations_hand),
+            base_rotation=homan.rot_mat_hand,
             base_translation=homan.translations_hand,
             homan=homan)
 
     homan.set_obj_params(
         translations_object=translation_inits,
-        rotations_object=rotation_inits,
+        rotations_object=rotation6d_inits,
         verts_object_og=vertices,
         faces_object=faces,
         scale_mode=cfg.homan.scale_mode,
@@ -158,6 +160,8 @@ def fit_scene(dataset,
     if cfg.optim.obj_part_prior:
         part_v, _ = obj_loader.load_part_by_name(cat)
         homan.set_obj_part(part_verts=part_v)
+    if cfg.optim.loss.obj_upright.weight > 0 and cat in cfg.optim.loss.obj_upright.apply_to:
+        homan._enable_upright = True
 
     homan.render_grid(obj_idx=0, with_hand=False,
                       low_reso=False, overlay_gt=True).savefig(fmt % 'input.png')
@@ -167,7 +171,7 @@ def fit_scene(dataset,
     """
     save_grid = (fmt % 'optim.mp4') if cfg.save_optim_video else None
     homan, _, results = reinit_sample_optimize(
-        homan, rotation_inits, translation_inits, scale_inits,
+        homan, rotation6d_inits, translation_inits, scale_inits,
         save_grid=save_grid,
         cfg=cfg.optim)
 

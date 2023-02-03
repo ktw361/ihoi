@@ -1,10 +1,8 @@
 from collections import namedtuple
 from typing import NamedTuple
-from black import E
 import tqdm
 import torch
 from homan.ho_forwarder_v2 import HOForwarderV2Vis, HOForwarderV2Impl
-from homan.utils.geometry import rot6d_to_matrix
 from temporal.utils import choose_with_softmax
 
 from moviepy import editor
@@ -175,7 +173,7 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
 
 
 def reinit_sample_optimize(homan: HOForwarderV2Vis,
-                           rotation_inits,
+                           rotation6d_inits,
                            translation_inits,
                            scale_inits,
                            weights=None,
@@ -213,7 +211,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
         transform_indices = torch.arange(e*num_epoch_parallel, (e+1)*num_epoch_parallel)
         homan.set_obj_transform(
             translation_inits[transform_indices,...],
-            rotation_inits[transform_indices,...],
+            rotation6d_inits[transform_indices,...],
             scale_inits[transform_indices,...])
         homan._check_shape_object(homan.num_obj)
 
@@ -265,7 +263,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             for i in range(num_epoch_parallel):
                 element = ElementType(
                     mask_score[i].item(), inside_score[i].item(), close_score[i].item(),
-                    R[i], t[i], s[i])
+                    R[[i]], t[[i]], s[[i]])
                 results.append(element)
         # Update weights
         weights[homan.sample_indices] -= tot_loss
@@ -288,5 +286,6 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
         translations_object=t,
         rotations_object=R,
         scale_object=s)
+    homan._check_shape_object(1)
 
     return homan, weights, results

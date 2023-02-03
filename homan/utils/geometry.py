@@ -3,41 +3,15 @@ import math
 
 import torch
 from torch.nn import functional as F
+from pytorch3d.transforms import euler_angles_to_matrix
 
 
 def rot6d_to_matrix(rot_6d):
-    """
-    Convert 6D rotation representation to 3x3 rotation matrix.
-    Reference: Zhou et al., "On the Continuity of Rotation Representations in Neural
-    Networks", CVPR 2019
-
-    Args:
-        rot_6d (B x 6): Batch of 6D Rotation representation.
-
-    Returns:
-        Rotation matrices (B x 3 x 3).
-    """
-    rot_6d = rot_6d.view(-1, 3, 2)
-    a1 = rot_6d[:, :, 0]
-    a2 = rot_6d[:, :, 1]
-    b1 = F.normalize(a1)
-    b2 = F.normalize(a2 - torch.einsum("bi,bi->b", b1, a2).unsqueeze(-1) * b1)
-    b3 = torch.cross(b1, b2)
-    return torch.stack((b1, b2, b3), dim=-1)
+    raise ValueError("Use pytorch3d instead")
 
 
 def matrix_to_rot6d(rotmat):
-    """
-    Convert rotation matrix to 6D rotation representation.
-
-    Args:
-        rotmat (B x 3 x 3): Batch of rotation matrices.
-
-    Returns:
-        6D Rotations (B x 3 x 2).
-    """
-    return rotmat.view(-1, 3, 3)[:, :, :2]
-
+    raise ValueError("Use pytorch3d instead")
 
 def combine_verts(verts_list):
     batch_size = verts_list[0].shape[0]
@@ -95,16 +69,25 @@ def compute_random_rotations(B=10, upright=False, device='cuda'):
             samples uniformly from rotation space.
 
     Returns:
-        rotation_matrices (B x 3 x 3).
+        rotation_matrices (B x 3 x 3) apply to col-vec
     """
     if upright:
-        raise NotImplementedError
-        a1 = torch.FloatTensor(B, 1).uniform_(0, 2 * math.pi)
-        a2 = torch.FloatTensor(B, 1).uniform_(-math.pi / 6, math.pi / 6)
-        a3 = torch.FloatTensor(B, 1).uniform_(-math.pi / 12, math.pi / 12)
+        """
+        # Note we need to return col-vec, hence R = [Rx; Ry; Rz]
+        # https://quaternions.online/
+        absolute_upright = torch.tensor([
+            [1, 0, 0],
+            [0, 0, 1],
+            [0, -1, 0]
+        ], device=device, dtype=torch.float32).repeat(B, 1, 1)
+        """
+        delta = math.pi / 3  # 30 degrees
+        x = torch.FloatTensor(B, 1).uniform_(-delta, delta)
+        y = torch.FloatTensor(B, 1).uniform_(-math.pi/2 - delta, -math.pi/2 + delta)
+        z = torch.FloatTensor(B, 1).uniform_(-delta, delta)
 
-        angles = torch.cat((a1, a2, a3), 1).cuda()
-        rotation_matrices = euler_angles_to_matrix(angles, "YXZ")
+        angles = torch.cat((y, x, z), 1).cuda()
+        rotation_matrices = euler_angles_to_matrix(angles, "XYZ")
     else:
         # Reference: J Avro. "Fast Random Rotation Matrices." (1992)
         x1, x2, x3 = torch.split(torch.rand(3 * B, device=device), B)
@@ -143,7 +126,7 @@ def grid_rotations_spiral(num_sphere_pts: int, num_xy_rots: int) -> torch.Tensor
     [Spiral Ref]: http://extremelearning.com.au/how-to-evenly-distribute-points-on-a-sphere-more-effectively-than-the-canonical-fibonacci-lattice/
     
     Return: 
-        (num_sphere_pts * num_xy_rots, 3, 3) 
+        (num_sphere_pts * num_xy_rots, 3, 3) apply to col-vec
     """
     n = num_sphere_pts
     if n >= 600000:

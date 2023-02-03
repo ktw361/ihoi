@@ -26,7 +26,8 @@ preprocess:
 
 homan:
     scale_mode: ???  # Object scale mode: 'depth' / 'scalar' / 'xyz'
-    rot_init_method: 'spiral'       # 'random' / 'spiral'
+    rot_init_method: 'spiral'       # 'random' / 'spiral' / 'upright'
+    apply_upright_to_bowl: False    # for bowl, set rot_init_method to 'upright'
     transl_init_method: 'fingers'   # 'zero' / 'fingers'(finger centers) / 'mask'
     scale_init_method: 'est'        # 'one' / 'xyz' / 'est'
     rotation_regularization: False  # TODO, NotImplmented
@@ -44,6 +45,9 @@ optim:
             num_priors: 5  # 5 for fingers, 8 for all regions
             reduce: 'avg' # 'avg' / 'min'
             num_nearest_points: 1    # For each p on hand, number of nearest points in obj
+        obj_upright:
+            weight: 0
+            apply_to: {'bowl'}
 
     obj_part_prior: False
 

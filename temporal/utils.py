@@ -6,8 +6,29 @@ import numpy as np
 from homan.ho_forwarder_v2 import HOForwarderV2Impl
 from homan.utils.geometry import compute_random_rotations, grid_rotations_spiral
 from homan.lib3d.optitrans import TCO_init_from_boxes_zup_autodepth
+from homan.math import avg_matrix_approx
+from pytorch3d.transforms import matrix_to_rotation_6d
 
 from libzhifan.numeric import check_shape
+
+
+def get_base_transform(bsize, 
+                       base_rotation=None, 
+                       base_translation=None,
+                       device='cuda',
+                       dtype=torch.float32):
+    if base_rotation is None:
+        base_rotation = torch.eye(
+            3, dtype=dtype, device=device).unsqueeze_(0)
+        base_rotation = base_rotation.repeat(bsize, 1, 1)
+    else:
+        base_rotation = base_rotation.clone()
+    if base_translation is None:
+        base_translation = torch.zeros(
+            [bsize, 1, 3], dtype=dtype, device=device)
+    else:
+        base_translation = base_translation.clone()
+    return base_rotation, base_translation
 
 
 def init_6d_pose_from_bboxes(bboxes: torch.Tensor, 
@@ -18,11 +39,12 @@ def init_6d_pose_from_bboxes(bboxes: torch.Tensor,
                              base_translation=None,
                              zero_init_transl=False) -> Tuple[torch.Tensor]:
     """
+    # TODO make this function conform to init_6d_pose_from_bboxes_v2
     Args:
         bboxes: (T, 4) xywh
         verts: (V, 3)
         cam_mat: (T, 3, 3)
-        base_rotation: (T, 3, 3)
+        base_rotation: (T, 3, 3) apply to row-vec
         base_translation: (T, 1, 3)
 
     Returns:
@@ -35,18 +57,11 @@ def init_6d_pose_from_bboxes(bboxes: torch.Tensor,
     check_shape(cam_mat, (bsize, 3, 3))
     if base_rotation is not None:
         check_shape(base_rotation, (bsize, 3, 3))
-
-    if base_rotation is None:
-        base_rotation = torch.eye(
-            3, dtype=rotations.dtype, device=device).unsqueeze_(0)
-        base_rotation = base_rotation.repeat(bsize, 1, 1)
-    else:
-        base_rotation = base_rotation.clone()
-    if base_translation is None:
-        base_translation = torch.zeros(
-            [bsize, 1, 3], dtype=rotations.dtype, device=device)
-    else:
-        base_translation = base_translation.clone()
+    
+    base_rotation, base_translation = get_base_transform(
+        bsize,
+        base_rotation=base_rotation, base_translation=base_translation,
+        device=device, dtype=rotations.dtype)
 
     """ V_out = (V_model @ R + T) @ R_base + T_base """
     V_rotated = torch.matmul(
@@ -96,13 +111,13 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
         scale_init_method: one of {'one', 'xyz', 'est'}
             if 'est', will estimate using bboxes and hand size.
             note this assume homan.scale_mode != 'xyz'
-        base_rotation: (T, 3, 3)
+        base_rotation: (T, 3, 3) can apply to row-vec
         base_translation: (T, 1, 3)
         homan: if transl_init_method == 'fingers', homan will be called.
 
     Returns: 
     Transformation from object to *base*, not to camera.
-        rotations: (num_init, 3, 3)
+        rotations_6d: (num_init, 6)
         translations: (num_init, 1, 3) identical for all num_inits
         scale: identical for all num_inits
             (num_init, 3)   for 'xyz'
@@ -110,37 +125,35 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
     """
     device = 'cuda'
     bsize = len(local_cam_mat)
+    """ rotations will be for col-vec """
     if rot_init_method == 'random':
-        rotations = compute_random_rotations(B=num_init, upright=False, device=device)
+        R_o2h = compute_random_rotations(B=num_init, upright=False, device=device)
     elif rot_init_method == 'spiral':
-        rotations = grid_rotations_spiral(num_sphere_pts=num_init, num_xy_rots=1)
-        rotations = rotations.to(device)
+        R_o2h = grid_rotations_spiral(num_sphere_pts=num_init, num_xy_rots=1).to(device)
+    elif rot_init_method == 'upright':
+        R_world = compute_random_rotations(B=num_init, upright=True, device=device)
+        avg_base_rotation = avg_matrix_approx(base_rotation).view(1, 3, 3)
+        # Solution to: R_world = R_base @ R_o2h
+        # equals R_base.T @ R_world = R_o2h, here they are col-vec
+        R_o2h = avg_base_rotation.permute(0, 2, 1).matmul(R_world)
         
     check_shape(local_cam_mat, (bsize, 3, 3))
-    if base_rotation is not None:
-        check_shape(base_rotation, (bsize, 3, 3))
-
-    if base_rotation is None:
-        base_rotation = torch.eye(
-            3, dtype=rotations.dtype, device=device).unsqueeze_(0)
-        base_rotation = base_rotation.repeat(bsize, 1, 1)
-    else:
-        base_rotation = base_rotation.clone()
-    if base_translation is None:
-        base_translation = torch.zeros(
-            [bsize, 1, 3], dtype=rotations.dtype, device=device)
-    else:
-        base_translation = base_translation.clone()
+    base_rotation, base_translation = get_base_transform(
+        bsize,
+        base_rotation=base_rotation, base_translation=base_translation,
+        device=device, dtype=R_o2h.dtype)
 
     """ V_out = (V_model @ R + T) @ R_base + T_base """
+    R_o2h_row = R_o2h.permute(0, 2, 1)
+    base_rot_row = base_rotation.permute(0, 2, 1)
     V_rotated = torch.matmul(
-        (verts_obj @ rotations).unsqueeze_(0),
-        base_rotation.unsqueeze(1))  # (T, N_init, V, 3)
+        (verts_obj @ R_o2h_row).unsqueeze_(0),
+        base_rot_row.unsqueeze(1))  # (T, N_init, V, 3)
 
     if scale_init_method == 'one':
-        scale_init = rotations.new_ones([num_init])
+        scale_init = R_o2h.new_ones([num_init])
     elif scale_init_method == 'xyz':
-        scale_init = rotations.new_ones([num_init, 3])
+        scale_init = R_o2h.new_ones([num_init, 3])
     elif scale_init_method == 'est':
         scale_init = estimate_obj_scale(global_bboxes, verts_hand, V_rotated, global_cam_mat)
         V_rotated = V_rotated * scale_init.view(1, -1, 1, 1)
@@ -148,7 +161,7 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
         raise ValueError()
 
     if transl_init_method == 'zero':
-        translations_init = rotations.new_zeros([num_init, 1, 3])
+        translations_init = R_o2h.new_zeros([num_init, 1, 3])
     elif transl_init_method == 'fingers':
         num_priors = 5
         v_hand = homan.get_verts_hand(hand_space=True)
@@ -167,7 +180,8 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
     else:
         raise ValueError()
     
-    return rotations, translations_init, scale_init
+    R_o2h_6d = matrix_to_rotation_6d(R_o2h)
+    return R_o2h_6d, translations_init, scale_init
 
 
 def estimate_obj_scale(bboxes: torch.Tensor,

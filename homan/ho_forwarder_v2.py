@@ -6,13 +6,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import neural_renderer as nr
 from pytorch3d.ops import knn_points, knn_gather
+from pytorch3d.transforms import rotation_6d_to_matrix, matrix_to_rotation_6d
 from torch_scatter import scatter_min
 
 from nnutils.handmocap import get_hand_faces
 from nnutils.mesh_utils_extra import compute_vert_normals
 from homan.contact_prior import get_contact_regions
 from homan.homan_ManoModel import HomanManoModel
-from homan.utils.geometry import matrix_to_rot6d, rot6d_to_matrix
 from homan.ho_utils import (
     compute_transformation_ortho, compute_transformation_persp)
 
@@ -56,6 +56,8 @@ class HOForwarderV2(nn.Module):
         self.renderer.light_intensity_ambient = 0.5
         self.renderer.background_color = [1.0, 1.0, 1.0]
 
+        self._enable_upright = False
+
     """ Common functions """
 
     def checkpoint(self, session=0):
@@ -75,7 +77,10 @@ class HOForwarderV2(nn.Module):
                         mano_trans=None,
                         mano_rot=None,
                         scale_hand=1.0):
-        """ Inititalize person parameters """
+        """ Inititalize person parameters 
+        Args:
+            rotations_hand: (B, 6)
+        """
         self.hand_sides = [hand_side]
         self.hand_nb = 1
         if mano_trans is None:
@@ -90,7 +95,7 @@ class HOForwarderV2(nn.Module):
                                               requires_grad=True)
         rotations_hand = rotations_hand.detach().clone()
         if rotations_hand.shape[-1] == 3:
-            rotations_hand = matrix_to_rot6d(rotations_hand)
+            raise ValueError('Invalid Input')
         self.rotations_hand = nn.Parameter(rotations_hand, requires_grad=True)
 
         self.mano_pca_pose = nn.Parameter(mano_pca_pose, requires_grad=True)
@@ -128,14 +133,15 @@ class HOForwarderV2(nn.Module):
         check_shape(self.ref_mask_hand, (bsize, self.mask_size, self.mask_size))
         mask_shape = self.ref_mask_hand.shape
         check_shape(self.keep_mask_hand, mask_shape)
-        check_shape(self.rotations_hand, (bsize, 3, 2))
+        check_shape(self.rotations_hand, (bsize, 6))
         check_shape(self.translations_hand, (bsize, 1, 3))
         # ordinal loss
         check_shape(self.masks_human, (bsize, 1, self.mask_size, self.mask_size))
 
     @property
     def rot_mat_hand(self) -> torch.Tensor:
-        return rot6d_to_matrix(self.rotations_hand)
+        """ (B, 3, 3) matrix, apply to col-vector """
+        return rotation_6d_to_matrix(self.rotations_hand)
 
     def get_verts_hand(self, detach_scale=False, hand_space=False) -> torch.Tensor:
         """
@@ -193,11 +199,12 @@ class HOForwarderV2(nn.Module):
         """ Initialize / Re-set object parameters
 
         Args:
-            obj_trans: (N, 3, 3)
+            translations_object:
+            rotations_object: (N, 6)
         """
         self.num_obj = len(rotations_object)
         if rotations_object.shape[-1] == 3:
-                rotations_object6d = matrix_to_rot6d(rotations_object)
+            raise ValueError("Invalid Input")
         else:
             rotations_object6d = rotations_object
         self.rotations_object = nn.Parameter(
@@ -264,7 +271,7 @@ class HOForwarderV2(nn.Module):
         check_shape(self.ref_mask_object,  (self.bsize, self.mask_size, self.mask_size))
         mask_shape = self.ref_mask_object.shape
         check_shape(self.keep_mask_object, mask_shape)
-        check_shape(self.rotations_object, (num_init, 3, 2))
+        check_shape(self.rotations_object, (num_init, 6))
         check_shape(self.translations_object, (num_init, 1, 3))
         if self.scale_mode == 'xyz':
             check_shape(self.scale_object, (num_init, 3))
@@ -285,7 +292,43 @@ class HOForwarderV2(nn.Module):
 
     @property
     def rot_mat_obj(self) -> torch.Tensor:
-        return rot6d_to_matrix(self.rotations_object)
+        """ (B, 3, 3) matrix which can apply to col-vector """
+        return rotation_6d_to_matrix(self.rotations_object)
+    
+    def get_obj_transform_world(self, cam_idx=None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Returns:
+            rots: (B, N, 3, 3) apply to col-vec
+        """
+        R_o2h = self.rot_mat_obj  # (N, 3, 3)
+        T_o2h = self.translations_object  # (N, 1, 3)
+        scale = self.scale_object
+        """ Compound T_o2c (T_obj w.r.t camera) = T_h2c x To2h_ """
+        R_hand = self.rot_mat_hand  # (B, 3, 3)
+        T_hand = self.translations_hand  # (B, 1, 3)
+        if cam_idx is not None:
+            R_hand = R_hand[[cam_idx]]
+            T_hand = T_hand[[cam_idx]]
+        R_o2h_row = R_o2h.permute(0, 2, 1)
+        R_hand_row = R_hand.permute(0, 2, 1)
+        rots_row = R_o2h_row.unsqueeze(0) @ R_hand_row.unsqueeze(1)  
+        rots = rots_row.permute(0, 1, 3, 2)
+        transl = torch.add(
+                torch.matmul(
+                    T_o2h.unsqueeze(0),  # (N, 1, 3) -> (1, N, 1, 3)
+                    R_hand_row.unsqueeze(1),  # (B, 3, 3) -> (B, 1, 3, 3)
+                ),  # (B, N, 1, 3)
+                T_hand.unsqueeze(1),  # (B, 1, 3) -> (B, 1, 1, 3)
+            ) # (B, N, 1, 3)
+        if self.scale_mode == 'depth':
+            transl = scale * transl
+        elif self.scale_mode == 'scalar':
+            transl = transl
+        elif self.scale_mode == 'xyz':
+            transl = transl
+        else:
+            raise ValueError("scale_mode not understood")
+        return rots, transl, scale
 
     def get_verts_object(self, cam_idx=None) -> torch.Tensor:
         """
@@ -300,31 +343,7 @@ class HOForwarderV2(nn.Module):
             verts_object: (B, N, V, 3)
                 or (1, N, V, 3) if cam_idx is not one
         """
-        R_o2h = self.rot_mat_obj  # (N, 3, 3)
-        T_o2h = self.translations_object  # (N, 1, 3)
-        scale = self.scale_object
-        """ Compound T_o2c (T_obj w.r.t camera) = T_h2c x To2h_ """
-        R_hand = self.rot_mat_hand  # (B, 3, 3)
-        T_hand = self.translations_hand  # (B, 1, 3)
-        if cam_idx is not None:
-            R_hand = R_hand[[cam_idx]]
-            T_hand = T_hand[[cam_idx]]
-        rots = R_o2h.unsqueeze(0) @ R_hand.unsqueeze(1)
-        transl = torch.add(
-                torch.matmul(
-                    T_o2h.unsqueeze(0),  # (N, 1, 3) -> (1, N, 1, 3)
-                    R_hand.unsqueeze(1),  # (B, 3, 3) -> (B, 1, 3, 3)
-                ),  # (B, N, 1, 3)
-                T_hand.unsqueeze(1),  # (B, 1, 3) -> (B, 1, 1, 3)
-            ) # (B, N, 1, 3)
-        if self.scale_mode == 'depth':
-            transl = scale * transl
-        elif self.scale_mode == 'scalar':
-            transl = transl
-        elif self.scale_mode == 'xyz':
-            transl = transl
-        else:
-            raise ValueError("scale_mode not understood")
+        rots, transl, scale = self.get_obj_transform_world(cam_idx)
 
         verts_obj = self.verts_object_og
         verts_obj = verts_obj.view(1, 1, -1, 3).expand(
@@ -335,7 +354,8 @@ class HOForwarderV2(nn.Module):
         else:
             scale = scale.view(1, -1, 1, 1).expand(
                 self.bsize, -1, -1, -1)
-        return torch.matmul(verts_obj * scale, rots) + transl
+        rots_row = rots.permute(0, 1, 3, 2)
+        return torch.matmul(verts_obj * scale, rots_row) + transl
 
 
 class HOForwarderV2Impl(HOForwarderV2):
@@ -707,6 +727,23 @@ class HOForwarderV2Impl(HOForwarderV2):
 
     """ Contact regions """
 
+    def loss_obj_upright(self) -> torch.Tensor:
+        """ Assume z-axis point inward
+        R_world * (0, 0, 1)' -> (0, 0, -1)'
+        
+        Returns:
+            (B,)
+        """
+        rots, _, _ = self.get_obj_transform_world()  # (B, 1, 3, 3)
+        rots_target = torch.tensor([
+            [1, 0, 0],
+            [0, 0, 1],
+            [0, -1, 0]], device=rots.device, dtype=rots.dtype)
+        rots_target = rots_target.view(1, 1, 3, 3).expand_as(rots)
+        # What is the best differentiable function to measure two rotations?
+        loss = ( (rots - rots_target).pow(2) ).sum([1, 2])
+        return loss
+
     def loss_closeness(self,
                        v_hand=None, v_obj=None, v_obj_select=None,
                        squared_dist=False,
@@ -786,7 +823,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             num_nearest_points: number of nearest K points in hand
 
         Returns:
-            loss: (B, N_obj, V)
+            loss: (B, N_obj)
         """
         k2 = num_nearest_points
 
@@ -865,6 +902,10 @@ class HOForwarderV2Impl(HOForwarderV2):
         tot_loss = cfg.loss.mask.weight * l_obj_mask +\
             cfg.loss.inside.weight * l_inside +\
             cfg.loss.close.weight * l_close
+
+        if self._enable_upright and cfg.loss.obj_upright.weight > 0:
+            l_upright = self.loss_obj_upright()[self.sample_indices].sum()
+            tot_loss += cfg.loss.obj_upright.weight * l_upright
         
         if print_metric:
             min_dist = self.loss_nearest_dist(

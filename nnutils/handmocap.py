@@ -131,10 +131,10 @@ def compute_hand_transform(rot_axisang,
         hand_wrapper: ManoPthWrapper
 
     Returns:
-        rotation: (B, 3, 3) row-vec
+        rotation6d: (B, 3, 3), will apply to row-vecs
         translation: (B, 1, 3)
     """
-    rotation = rot_cvt.axis_angle_to_matrix(rot_axisang)  # (1, 3) - > (1, 3, 3)
+    rotation = rot_cvt.axis_angle_to_matrix(rot_axisang)  # (1, 3) - > (1, 3, 3), col-vec
     rot_homo = geom_utils.rt_to_homo(rotation)
     glb_rot = geom_utils.matrix_to_se3(rot_homo)  # (1, 4, 4) -> (1, 12)
     _, joints = get_hand_wrapper(side)(
@@ -155,8 +155,8 @@ def compute_hand_transform(rot_axisang,
     tz = f / sw
     translation = torch.cat([tx, ty, tz], dim=1)
     translation = translation - joints[:, 5]
-    rotation_row = rotation.transpose(1, 2)
-    return rotation_row, translation[:, None]
+    rotation6d = rot_cvt.matrix_to_rotation_6d(rotation)
+    return rotation6d, translation[:, None]
 
 
 def cam_from_bbox(hand_bbox,

@@ -11,25 +11,26 @@ from pytorch3d.transforms import (
 def avg_rot6d_approx(rot6d: torch.Tensor, weights=None) -> torch.Tensor:
     """
     Args:
-        rot6d: (N, 6)
+        rot6d: (N, 6), if flat=True
     Returns:
         rot6dAvg: (6,)
     """
-    matrices = rotation_6d_to_matrix(rot6d)
-    matrixAvg = avg_matrix_approx(matrices, weights)
-    return matrix_to_rotation_6d(matrixAvg)
+    quats = matrix_to_quaternion(rotation_6d_to_matrix(rot6d))
+    q_avg = avg_quaternions_approx(quats, weights)
+    return matrix_to_rotation_6d(quaternion_to_matrix(q_avg))
 
 def avg_matrix_approx(matrices: torch.Tensor, weights=None) -> torch.Tensor:
     """
     Args:
-        matrices: (N, 3, 3)
+        matrices: (N, 3, 3) apply to col-vec
     Returns:
-        matrixAvg: (3, 3)
+        matrix: (3, 3)
     """
     quats = matrix_to_quaternion(matrices)
-    qAvg = avg_quaternions_approx(quats, weights)
-    return quaternion_to_matrix(qAvg)
-    
+    q_avg = avg_quaternions_approx(quats, weights)
+    return quaternion_to_matrix(q_avg)
+
+
 def avg_quaternions_approx(quats: torch.Tensor, weights=None) -> torch.Tensor:
     """
     Args:
@@ -49,9 +50,24 @@ def avg_quaternions_approx(quats: torch.Tensor, weights=None) -> torch.Tensor:
             weights[i] = -weights[i]
         qAvg += weights[i] * q
     return qAvg / torch.norm(qAvg)
-    
+
+
+def avg_rot6d_eigen(rot6d: torch.Tensor, weights=None) -> torch.Tensor:
+    """
+    Args:
+        rot6d: 
+            - (N, 6), if flat=True
+    Returns:
+        rot6dAvg: (6,)
+    """
+    quats = matrix_to_quaternion(rotation_6d_to_matrix(rot6d))
+    q_avg = avg_quaternions_eigen(quats)
+    return matrix_to_rotation_6d(quaternion_to_matrix(q_avg))
+
 
 def avg_quaternions_eigen(quats: torch.Tensor, weights=None) -> torch.Tensor:
+    # Why flipped?
+    raise NotImplementedError
     if weights is not None and len(quats) != len(weights):
         raise ValueError("Args are of different length")
     if weights is None:

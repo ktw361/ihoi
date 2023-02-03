@@ -77,7 +77,7 @@ def compute_transformation_persp(meshes: torch.Tensor,
     Args:
         meshes (V x 3 or B x V x 3): Vertices.
         translations (B x 1 x 3).
-        rotations (B x 3 x 3).
+        rotations (B x 3 x 3) apply to col-vec
         intrinsic_scales (B).
 
     Returns:
@@ -90,6 +90,7 @@ def compute_transformation_persp(meshes: torch.Tensor,
     if rotations is None:
         rotations = torch.FloatTensor([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
         rotations = rotations.to(device)
+    rotations = rotations.permute(0, 2, 1)  # Col => Row
     if intrinsic_scales is None:
         intrinsic_scales = torch.ones(B).to(device)
     return (meshes * intrinsic_scales) @ rotations + (intrinsic_scales * translations)
