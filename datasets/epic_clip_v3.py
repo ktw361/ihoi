@@ -157,7 +157,7 @@ class EpicClipDatasetV3(Dataset):
                  image_size=VISOR_SIZE,
                  hand_expansion=0.4,
                  crop_hand_mask=True,
-                 sample_frames=20,  # TODO, take into account mask quality?
+                 sample_frames=20,
                  *args,
                  **kwargs):
         """_summary_

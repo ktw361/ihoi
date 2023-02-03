@@ -220,9 +220,6 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             homan.translations_object,
             homan.scale_object,
         ]
-        if cfg.optimize_hand_wrist:
-            params.append(homan.rotations_hand)
-            params.append(homan.translations_hand)
 
         optimizer = torch.optim.Adam([{
             'params': params,

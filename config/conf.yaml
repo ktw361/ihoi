@@ -14,9 +14,8 @@ hydra:
         dir: outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
 dataset:
-    version: 'v3'  # 'v2'
-    # image_sets: '/home/skynet/Zhifan/data/epic_analysis/gt_clips.json'
-    image_sets: ???  # '/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_progress.json'
+    version: 'v3'  # 'v2 # image_sets: '/home/skynet/Zhifan/data/epic_analysis/gt_clips.json'
+    image_sets: ???  # '/home/skynet/Zhifan/epic_analysis/hos/tools/model-input-Feb03.json'
     sample_frames: 30
 
 preprocess:
@@ -27,7 +26,7 @@ preprocess:
 homan:
     scale_mode: ???  # Object scale mode: 'depth' / 'scalar' / 'xyz'
     rot_init_method: 'spiral'       # 'random' / 'spiral' / 'upright'
-    apply_upright_to_bowl: False    # for bowl, set rot_init_method to 'upright'
+    apply_upright_to_bowl: True    # for bowl, set rot_init_method to 'upright'
     transl_init_method: 'fingers'   # 'zero' / 'fingers'(finger centers) / 'mask'
     scale_init_method: 'est'        # 'one' / 'xyz' / 'est'
     rotation_regularization: False  # TODO, NotImplmented
@@ -50,8 +49,6 @@ optim:
             apply_to: {'bowl'}
 
     obj_part_prior: False
-
-    optimize_hand_wrist: False  # Deprecated
 
     lr: 1e-2
     num_epochs: 40
