@@ -202,8 +202,7 @@ class EpicClipDatasetV3(Dataset):
             infos = json.load(fp)
 
         def is_valid(info: dict):
-            # TODO: remove this check
-            return info.status == 'FOUND' and info.end - info.start >= 30
+            return info.status == 'FOUND'
 
         infos = [ClipInfo(**v) for v in infos]
         return list(filter(is_valid, infos))
