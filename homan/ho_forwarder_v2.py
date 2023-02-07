@@ -1222,14 +1222,30 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         return out
 
     def render_grid(self, obj_idx=0, with_hand=True,
-                    figsize=(10, 10), low_reso=True, *args, **kwargs):
-        """ grip of  multiple render """
+                    figsize=(10, 10), low_reso=True,
+                    return_list=False, *args, **kwargs):
+        """
+        Args:
+            obj_idx: -1 for no object
+            with_hand: whether to render hand
+            figsize: (w, h)
+            low_reso: call render_grid_np() if True
+            return_list: return a list of images if True
+        """
         if low_reso:
             out = self.render_grid_np(obj_idx=obj_idx, with_hand=with_hand, *args, **kwargs)
             fig, ax = plt.subplots()
             ax.imshow(out)
             plt.axis('off')
             return fig
+        
+        if return_list:
+            ret = []
+            for cam_idx in range(self.bsize):
+                img = self.render_scene(
+                    scene_idx=cam_idx, obj_idx=obj_idx, with_hand=with_hand, *args, **kwargs)
+                ret.append(img)
+            return ret
 
         l = self.bsize
         num_cols = 5

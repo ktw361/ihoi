@@ -194,7 +194,8 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
     vis_interval = cfg.vis_interval
     criterion = cfg.criterion
 
-    ElementType = namedtuple("ElementType", "mask inside close R t s")
+    ElementType = namedtuple(
+        "ElementType", "mask inside close R t s sample_indices")
 
     weights = homan.rotations_hand.new_zeros([homan.bsize]) \
         if weights is None else weights
@@ -260,7 +261,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             for i in range(num_epoch_parallel):
                 element = ElementType(
                     mask_score[i].item(), inside_score[i].item(), close_score[i].item(),
-                    R[[i]], t[[i]], s[[i]])
+                    R[[i]], t[[i]], s[[i]], homan.sample_indices)
                 results.append(element)
         # Update weights
         weights[homan.sample_indices] -= tot_loss
@@ -283,6 +284,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
         translations_object=t,
         rotations_object=R,
         scale_object=s)
+    homan.sample_indices = sorted(results[idx].sample_indices)
     homan._check_shape_object(1)
 
     return homan, weights, results
