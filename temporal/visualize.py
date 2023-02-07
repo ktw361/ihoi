@@ -65,9 +65,19 @@ def concat_pose_meshes(pose_machine,
 
 def make_compare_video(homan: HOForwarderV2Vis,
                        global_cam: BatchCameraManager,
-                       global_images: np.ndarray) -> List[np.ndarray]:
+                       global_images: np.ndarray,
+                       render_frames: str) -> List[np.ndarray]:
+    """
+    Args:
+        frames: 'all' or 'ransac'
+    """
     frames = []
-    for i in range(homan.bsize):
+    if render_frames == 'all':
+        scene_indices = range(homan.bsize)
+    elif render_frames == 'ransac':
+        scene_indices = homan.sample_indices
+
+    for i in scene_indices:
         img_mesh = homan.render_global(
             global_cam=global_cam,
             global_images=global_images,

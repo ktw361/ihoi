@@ -20,3 +20,5 @@ data/
 weights/*
 !weights/contact_regions.json
 epic_analysis
+
+scratch/

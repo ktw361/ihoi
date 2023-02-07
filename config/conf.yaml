@@ -1,8 +1,11 @@
 description: ???
 
 # Debug
-save_action_video: True     # Save action video, compare with original
-save_optim_video: True      # Save optimization video
+action_video:
+    save: True                  # Save action video, compare with original
+    render_frames: ???          # 'ransac' / 'all
+
+save_optim_video: False         # Save optimization video
 save_pth: False
 
 # Running arguments
@@ -24,9 +27,11 @@ preprocess:
     rend_size: 256
 
 homan:
-    scale_mode: ???  # Object scale mode: 'depth' / 'scalar' / 'xyz'
+    optimize_hand: True 
+
+    scale_mode: 'scalar'            # Object scale mode: 'depth' / 'scalar' / 'xyz'
     rot_init_method: 'spiral'       # 'random' / 'spiral' / 'upright'
-    apply_upright_to_bowl: True    # for bowl, set rot_init_method to 'upright'
+    apply_upright_to_bowl: True     # for bowl, set rot_init_method to 'upright'
     transl_init_method: 'fingers'   # 'zero' / 'fingers'(finger centers) / 'mask'
     scale_init_method: 'est'        # 'one' / 'xyz' / 'est'
     rotation_regularization: False  # TODO, NotImplmented
@@ -38,12 +43,12 @@ optim:
             weight: 1.0
         inside:
             weight: 1.0
-            num_nearest_points: 3    # For each p on obj, number of nearest points in hand
+            num_nearest_points: 3   # For each p on obj, number of nearest points in hand
         close:
             weight: 0.1
-            num_priors: 5  # 5 for fingers, 8 for all regions
-            reduce: 'avg' # 'avg' / 'min'
-            num_nearest_points: 1    # For each p on hand, number of nearest points in obj
+            num_priors: 5           # 5 for fingers, 8 for all regions
+            reduce: 'avg'           # 'avg' / 'min'
+            num_nearest_points: 1   # For each p on hand, number of nearest points in obj
         obj_upright:
             weight: 0
             apply_to: {'bowl'}
@@ -52,7 +57,7 @@ optim:
 
     lr: 1e-2
     num_epochs: 40
-    num_epoch_parallel: 4  # 8: 8G, 10: 10G
+    num_epoch_parallel: 1  # 8: 8G, 10: 10G
     epoch_tqdm: True
     num_iters: 50
     iter_tqdm: False

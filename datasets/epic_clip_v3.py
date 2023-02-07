@@ -1,4 +1,5 @@
 from typing import NamedTuple, List, Union
+from argparse import ArgumentParser
 import pickle, json
 import os, re, bisect
 from PIL import Image
@@ -375,7 +376,13 @@ class EpicClipDatasetV3(Dataset):
 
 
 if __name__ == '__main__':
-    pass
+    # Debug dataset
+    parser = ArgumentParser()
+    parser.add_argument('index', type=int)
+    parser.add_argument('--image_sets', type=str, default='/home/skynet/Zhifan/epic_analysis/hos/tools/model-input-Feb03.json')
+    parser.add_argument('--sample_frames', type=int, default=30)
+    args = parser.parse_args()
 
-    # dataset = EpicClipDatasetV3(
-    #     image_sets=)
+    dataset = EpicClipDatasetV3(
+        image_sets=args.image_sets, sample_frames=args.sample_frames)
+    element = dataset[args.index]

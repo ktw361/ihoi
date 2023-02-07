@@ -127,7 +127,8 @@ def fit_scene(dataset,
 
     print("Optimize hand")
     homan = smooth_hand_pose(homan, lr=0.1)
-    homan = optimize_hand(homan, verbose=False)
+    if cfg.optmize_hand:
+        homan = optimize_hand(homan, verbose=False)
 
     obj_mesh = obj_loader.load_obj_by_name(cat, return_mesh=False)
     vertices = torch.as_tensor(obj_mesh.vertices, device='cuda')
@@ -170,7 +171,7 @@ def fit_scene(dataset,
     Step 4. Optimize both hand+object mask using best object pose
     """
     save_grid = (fmt % 'optim.mp4') if cfg.save_optim_video else None
-    homan, _, results = reinit_sample_optimize(
+    homan, weights, results = reinit_sample_optimize(
         homan, rotation6d_inits, translation_inits, scale_inits,
         save_grid=save_grid,
         cfg=cfg.optim)
@@ -178,10 +179,13 @@ def fit_scene(dataset,
     homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
     if cfg.save_pth:
         torch.save(homan, (fmt % 'model.pth'))
+        torch.save(weights, (fmt % 'weights.pth'))
         torch.save([list(v) for v in results], (fmt % 'results.pth'))
 
-    if cfg.save_action_video:
-        frames = make_compare_video(homan, global_cam, global_images=images)
+    if cfg.action_video.save:
+        frames = make_compare_video(
+            homan, global_cam, global_images=images, 
+            render_frames=cfg.action_video.render_frames)
         action_cilp = editor.ImageSequenceClip(frames, fps=5)
         action_cilp.write_videofile(fmt % 'action.mp4')
 
