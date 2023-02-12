@@ -6,9 +6,10 @@ action_video:
     render_frames: ???          # 'ransac' / 'all
 
 save_optim_video: False         # Save optimization video
-save_pth: False
+save_pth: True
 
 # Running arguments
+debug_index: null
 index_from: 0
 index_to: 99999999
 
@@ -30,8 +31,64 @@ homan:
     optimize_hand: True 
 
     scale_mode: 'scalar'            # Object scale mode: 'depth' / 'scalar' / 'xyz'
-    rot_init_method: 'spiral'       # 'random' / 'spiral' / 'upright'
-    apply_upright_to_bowl: True     # for bowl, set rot_init_method to 'upright'
+    rot_init:
+        # Assuming Y-axis is the axis of facing-up and of symmetry
+        # If method == 'spiral' and 'upright', 
+        #   num_init = num_sphere_pts * num_sym_rots
+        # If method == 'upright', '-z' is the outward direction of projection
+        #  currently upright is implemented using spiral method.
+        # If genearte_on == 'camera', will generate poses on the camera space
+
+        # template:                   
+        #     method: 'upright'       # 'spiral', 'upright', 'random'
+        #     generate_on: 'camera'   # 'camera' / 'hand'
+        #     upright_axis: '-z'      # Required for upright, '+'/'-' for x/y/z 
+        #     upright_lim: 0.3        # Required for upright
+        #     num_init: 40            # Required for random
+        #     num_sphere_pts: 40      # Required for spiral and upright
+        #     num_sym_rots: 1         # Required for spiral and upright
+
+        plate:
+            method: 'upright'
+            upright_axis: '+x'
+            upright_lim: 0.3
+            generate_on: 'hand'       # face-up in the hand
+            num_sphere_pts: 40
+            num_sym_rots: 1
+        bowl:
+            method: 'upright'
+            upright_axis: '+x'
+            upright_lim: 0.3
+            generate_on: 'hand'
+            num_sphere_pts: 40
+            num_sym_rots: 1
+        bottle:
+            method: 'upright'
+            upright_axis: '+z'
+            upright_lim: 0.6            # Allow vertical
+            generate_on: 'hand'         # bottle always face-up in the hand
+            num_sphere_pts: 40
+            num_sym_rots: 1
+        cup:
+            method: 'upright'
+            upright_axis: '+z'
+            upright_lim: 0.6            # Allow vertical
+            generate_on: 'hand'
+            num_sphere_pts: 40
+            num_sym_rots: 1
+        mug:
+            method: 'upright'
+            upright_axis: '+z'
+            upright_lim: 0.3
+            generate_on: 'hand'
+            num_sphere_pts: 40
+            num_sym_rots: 1
+        can:
+            method: 'spiral'
+            generate_on: 'hand'
+            num_sphere_pts: 40
+            num_sym_rots: 1
+
     transl_init_method: 'fingers'   # 'zero' / 'fingers'(finger centers) / 'mask'
     scale_init_method: 'est'        # 'one' / 'xyz' / 'est'
     rotation_regularization: False  # TODO, NotImplmented
@@ -56,7 +113,6 @@ optim:
     obj_part_prior: False
 
     lr: 1e-2
-    num_epochs: 40
     num_epoch_parallel: 1  # 8: 8G, 10: 10G
     epoch_tqdm: True
     num_iters: 50

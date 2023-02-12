@@ -19,6 +19,7 @@ data/
 
 weights/*
 !weights/contact_regions.json
+!weights/obj_models/
 epic_analysis
 
 scratch/

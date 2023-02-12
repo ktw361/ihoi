@@ -178,7 +178,8 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                            scale_inits,
                            weights=None,
                            save_grid: str = None,
-                           cfg = None):
+                           cfg = None,
+                           debug_num_epoch=None):
     """
     Args:
         save_grid: str, fname to save the optimization process
@@ -186,7 +187,6 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
     """
     # Read out from config
     lr = cfg.lr
-    num_epochs = cfg.num_epochs
     num_epoch_parallel = cfg.num_epoch_parallel
     num_iters = cfg.num_iters
     temperature = cfg.temperature
@@ -204,6 +204,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
 
     results = []
 
+    num_epochs = rotation6d_inits.shape[0] if debug_num_epoch is None else debug_num_epoch
     for e in tqdm.trange(num_epochs // num_epoch_parallel, disable=not cfg.epoch_tqdm):
 
         homan.sample_indices = choose_with_softmax(
@@ -271,10 +272,6 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
             [v*255 for v in out_frames], fps=15).write_videofile(save_grid)
 
     # write-back best
-    # final_score = \
-    #     torch.softmax(torch.as_tensor([-v.mask for v in results]), 0) + \
-    #     torch.softmax(torch.as_tensor([-v.inside for v in results]), 0) + \
-    #     torch.softmax(torch.as_tensor([-v.close for v in results]), 0)
     final_score = \
         torch.softmax(torch.as_tensor([- getattr(v, criterion) for v in results]), 0)
 

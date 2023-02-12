@@ -41,6 +41,10 @@ def main(cfg: DictConfig) -> None:
     obj_loader = OBJLoader()
     hand_predictor = get_handmocap_predictor()
 
+    if cfg.debug_index is not None:
+        fit_scene(dataset, hand_predictor, obj_loader, cfg.debug_index, cfg=cfg)
+        return
+
     for index in tqdm.trange(cfg.index_from, min(cfg.index_to, len(dataset))):
         try:
             fit_scene(dataset, hand_predictor, obj_loader, index, cfg=cfg)
@@ -125,25 +129,22 @@ def fit_scene(dataset,
     elif cfg.dataset.version == 'v3':
         fmt = f'{info.vid}_{info.start}_{info.end}_%s'
 
-    print("Optimize hand")
+    print("Smooth hand")
     homan = smooth_hand_pose(homan, lr=0.1)
-    if cfg.optmize_hand:
+    if cfg.homan.optimize_hand:
+        print("Optimize hand")
         homan = optimize_hand(homan, verbose=False)
 
     obj_mesh = obj_loader.load_obj_by_name(cat, return_mesh=False)
     vertices = torch.as_tensor(obj_mesh.vertices, device='cuda')
     faces = torch.as_tensor(obj_mesh.faces, device='cuda')
-    num_initializations = cfg.optim.num_epochs
 
     with torch.no_grad():
-        rot_init_method = cfg.homan.rot_init_method
-        if cfg.homan.apply_upright_to_bowl and cat == 'bowl':
-            rot_init_method = 'upright'
+        rot_init = cfg.homan.rot_init[cat]
         rotation6d_inits, translation_inits, scale_inits = init_6d_obj_pose_v2(
             obj_bboxes, homan.get_verts_hand(), vertices,
             global_cam_mat=global_cam.get_K(), local_cam_mat=ihoi_cam.get_K(),
-            num_init=num_initializations,
-            rot_init_method=rot_init_method,
+            rot_init=rot_init,
             transl_init_method=cfg.homan.transl_init_method,
             scale_init_method=cfg.homan.scale_init_method,
             base_rotation=homan.rot_mat_hand,

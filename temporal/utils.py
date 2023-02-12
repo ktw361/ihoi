@@ -4,7 +4,9 @@ import torch
 import numpy as np
 
 from homan.ho_forwarder_v2 import HOForwarderV2Impl
-from homan.utils.geometry import compute_random_rotations, grid_rotations_spiral
+from homan.utils.geometry import (
+    compute_random_rotations, generate_rotations_o2h
+)
 from homan.lib3d.optitrans import TCO_init_from_boxes_zup_autodepth
 from homan.math import avg_matrix_approx
 from pytorch3d.transforms import matrix_to_rotation_6d
@@ -17,6 +19,11 @@ def get_base_transform(bsize,
                        base_translation=None,
                        device='cuda',
                        dtype=torch.float32):
+    """
+    Returns:
+        base_rotation: (B, 3, 3)
+        base_translation: (B, 1, 3)
+    """
     if base_rotation is None:
         base_rotation = torch.eye(
             3, dtype=dtype, device=device).unsqueeze_(0)
@@ -92,8 +99,7 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
                         verts_obj: torch.Tensor,
                         global_cam_mat: torch.Tensor,
                         local_cam_mat: torch.Tensor,
-                        num_init: int,
-                        rot_init_method: str,
+                        rot_init: dict,
                         transl_init_method: str,
                         scale_init_method: str,
                         base_rotation=None,
@@ -106,7 +112,7 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
         verts: (V, 3)
         global_cam_mat: (T, 3, 3) 
         local_cam_mat: (T, 3, 3) 
-        rot_init_method: one of {'random', 'spiral'}
+        rot_init: dict, see conf.yaml
         transl_init_method: one of {'zero', 'fingers', 'mask'}
         scale_init_method: one of {'one', 'xyz', 'est'}
             if 'est', will estimate using bboxes and hand size.
@@ -122,20 +128,19 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
         scale: identical for all num_inits
             (num_init, 3)   for 'xyz'
             (num_init,)     otherwise
+    num_init = num_sphere_pts * num_xy_rots if rot_init.method == 'spiral' or 'upright'
     """
     device = 'cuda'
     bsize = len(local_cam_mat)
     """ rotations will be for col-vec """
-    if rot_init_method == 'random':
-        R_o2h = compute_random_rotations(B=num_init, upright=False, device=device)
-    elif rot_init_method == 'spiral':
-        R_o2h = grid_rotations_spiral(num_sphere_pts=num_init, num_xy_rots=1).to(device)
-    elif rot_init_method == 'upright':
-        R_world = compute_random_rotations(B=num_init, upright=True, device=device)
+    if rot_init['method'] == 'upright':
         avg_base_rotation = avg_matrix_approx(base_rotation).view(1, 3, 3)
-        # Solution to: R_world = R_base @ R_o2h
-        # equals R_base.T @ R_world = R_o2h, here they are col-vec
-        R_o2h = avg_base_rotation.permute(0, 2, 1).matmul(R_world)
+        R_o2h, _ = generate_rotations_o2h(
+            rot_init, base_rotations=avg_base_rotation, device=device)
+    else:
+        R_o2h, _ = generate_rotations_o2h(
+            rot_init, base_rotations=None, device=device)
+    num_init = R_o2h.size(0)
         
     check_shape(local_cam_mat, (bsize, 3, 3))
     base_rotation, base_translation = get_base_transform(
@@ -172,7 +177,6 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
         z_o2c = estimate_obj_depth(global_bboxes, V_rotated, local_cam_mat)  # (T, N_init), obj-to-cam
         x_o2c, y_o2c = estimate_obj_xy(global_bboxes, V_rotated, global_cam_mat, z_o2c)  # (T, N_init), obj-to-cam
         est_translations = torch.cat([x_o2c, y_o2c, z_o2c], dim=-1).view(bsize, num_init, 1, 3)
-
         translations_init = torch.einsum(
             'bnij,bkj->bnik', 
             est_translations - base_translation.unsqueeze(1), base_rotation)

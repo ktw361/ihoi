@@ -295,10 +295,12 @@ class HOForwarderV2(nn.Module):
         """ (B, 3, 3) matrix which can apply to col-vector """
         return rotation_6d_to_matrix(self.rotations_object)
     
-    def get_obj_transform_world(self, cam_idx=None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def get_obj_transform_world(self, cam_idx=None, hand_space=False) -> Tuple:
         """
         Returns:
             rots: (B, N, 3, 3) apply to col-vec
+            transl: (B, N, 1, 3)
+            scale: (N)
         """
         R_o2h = self.rot_mat_obj  # (N, 3, 3)
         T_o2h = self.translations_object  # (N, 1, 3)
@@ -311,6 +313,11 @@ class HOForwarderV2(nn.Module):
             T_hand = T_hand[[cam_idx]]
         R_o2h_row = R_o2h.permute(0, 2, 1)
         R_hand_row = R_hand.permute(0, 2, 1)
+        if hand_space:
+            transl = T_o2h
+            if self.scale_mode == 'depth':
+                transl = scale * transl
+            return R_o2h.unsqueeze(0), transl, scale
         rots_row = R_o2h_row.unsqueeze(0) @ R_hand_row.unsqueeze(1)  
         rots = rots_row.permute(0, 1, 3, 2)
         transl = torch.add(
@@ -330,7 +337,7 @@ class HOForwarderV2(nn.Module):
             raise ValueError("scale_mode not understood")
         return rots, transl, scale
 
-    def get_verts_object(self, cam_idx=None) -> torch.Tensor:
+    def get_verts_object(self, cam_idx=None, hand_space=False) -> torch.Tensor:
         """
             V_out = (V_model x R_o2h + T_o2h) x R_hand + T_hand
                   = V x (R_o2h x R_hand) + (T_o2h x R_hand + T_hand)
@@ -338,22 +345,23 @@ class HOForwarderV2(nn.Module):
 
         Args:
             cam_idx: int
+            hand_space: bool, if False, return in camera space
 
         Returns:
             verts_object: (B, N, V, 3)
                 or (1, N, V, 3) if cam_idx is not one
         """
-        rots, transl, scale = self.get_obj_transform_world(cam_idx)
+        rots, transl, scale = self.get_obj_transform_world(
+            cam_idx, hand_space=hand_space)
 
         verts_obj = self.verts_object_og
+        n_cams = self.bsize if cam_idx is None else 1
         verts_obj = verts_obj.view(1, 1, -1, 3).expand(
-            self.bsize, self.num_obj, -1, -1)
+            n_cams, self.num_obj, -1, -1)
         if self.scale_mode == 'xyz':
-            scale = scale.view(1, -1, 1, 3).expand(
-                self.bsize, -1, -1, -1)
+            scale = scale.view(1, -1, 1, 3).expand(n_cams, -1, -1, -1)
         else:
-            scale = scale.view(1, -1, 1, 1).expand(
-                self.bsize, -1, -1, -1)
+            scale = scale.view(1, -1, 1, 1).expand(n_cams, -1, -1, -1)
         rots_row = rots.permute(0, 1, 3, 2)
         return torch.matmul(verts_obj * scale, rots_row) + transl
 
