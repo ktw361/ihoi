@@ -195,7 +195,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
     criterion = cfg.criterion
 
     ElementType = namedtuple(
-        "ElementType", "mask inside close R t s sample_indices")
+        "ElementType", "iou collision min_dist R t s sample_indices")
 
     weights = homan.rotations_hand.new_zeros([homan.bsize]) \
         if weights is None else weights
@@ -249,39 +249,50 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                 loop.update()
 
         with torch.no_grad():
-            v_hand = homan.get_verts_hand()[homan.sample_indices, ...]
-            v_obj = homan.get_verts_object()[homan.sample_indices, ...]
-            mask_score = homan.forward_obj_pose_render()['mask'].sum(0)
-            inside_score = homan.loss_insideness(
-                v_hand=v_hand, v_obj=v_obj).sum(0)
-            close_score = homan.loss_closeness(
-                v_hand=v_hand, v_obj=v_obj).sum(0)
+            metrics = homan.eval_metrics()
+            iou = metrics['iou']                # bigger better
+            collision = metrics['collision']    # smaller better
+            min_dist = metrics['min_dist']      # smaller better
+            mean_iou = iou.mean(0)
+            mean_collision = collision.mean(0)
+            mean_min_dist = min_dist.mean(0)
+            # v_hand = homan.get_verts_hand()[homan.sample_indices, ...]
+            # v_obj = homan.get_verts_object()[homan.sample_indices, ...]
+            # mask_score = homan.forward_obj_pose_render()['mask'].sum(0)
+            # inside_score = homan.loss_insideness(
+            #     v_hand=v_hand, v_obj=v_obj).sum(0)
+            # close_score = homan.loss_closeness(
+            #     v_hand=v_hand, v_obj=v_obj).sum(0)
             R = homan.rotations_object.detach().clone()
             t = homan.translations_object.detach().clone()
             s = homan.scale_object.detach().clone()
             for i in range(num_epoch_parallel):
                 element = ElementType(
-                    mask_score[i].item(), inside_score[i].item(), close_score[i].item(),
+                    mean_iou[i].item(), mean_collision[i].item(), mean_min_dist[i].item(),
                     R[[i]], t[[i]], s[[i]], homan.sample_indices)
                 results.append(element)
         # Update weights
-        weights[homan.sample_indices] -= tot_loss
+        weights[homan.sample_indices] -= tot_loss  # TODO, is it good?
 
     if save_grid:
         editor.ImageSequenceClip(
             [v*255 for v in out_frames], fps=15).write_videofile(save_grid)
 
     # write-back best
+    sign = 1 if criterion == 'iou' else -1
     final_score = \
-        torch.softmax(torch.as_tensor([- getattr(v, criterion) for v in results]), 0)
+        torch.softmax(torch.as_tensor([sign * getattr(v, criterion) for v in results]), 0)
 
-    idx = final_score.argmax()
-    R, t, s = results[idx].R, results[idx].t, results[idx].s
+    best_idx = final_score.argmax()
+    best_metric = {
+        'iou': results[best_idx].iou, 'collision': results[best_idx].collision,
+        'min_dist': results[best_idx].min_dist}
+    R, t, s = results[best_idx].R, results[best_idx].t, results[best_idx].s
     homan.set_obj_transform(
         translations_object=t,
         rotations_object=R,
         scale_object=s)
-    homan.sample_indices = sorted(results[idx].sample_indices)
+    homan.sample_indices = sorted(results[best_idx].sample_indices)
     homan._check_shape_object(1)
 
-    return homan, weights, results
+    return homan, weights, results, best_metric

@@ -56,8 +56,6 @@ class HOForwarderV2(nn.Module):
         self.renderer.light_intensity_ambient = 0.5
         self.renderer.background_color = [1.0, 1.0, 1.0]
 
-        self._enable_upright = False
-
     """ Common functions """
 
     def checkpoint(self, session=0):
@@ -697,7 +695,7 @@ class HOForwarderV2Impl(HOForwarderV2):
         l_chamfer = (l_chamfer**2).sum()
         return l_chamfer
 
-    def loss_nearest_dist(self, v_hand=None, v_obj=None) -> torch.Tensor:
+    def loss_nearest_dist(self, v_hand=None, v_obj=None, phy_factor=True) -> torch.Tensor:
         """ returns (B, N_obj) """
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
@@ -707,8 +705,10 @@ class HOForwarderV2Impl(HOForwarderV2):
         v_obj = v_obj.view(bsize*num_obj, -1, 3)
         l_min_d = compute_nearest_dist(v_obj, v_hand_copied)
         l_min_d = l_min_d.view(bsize, num_obj)
-        phy_factor = self.physical_factor().view(-1, 1).expand(-1, num_obj)
-        return l_min_d * phy_factor
+        if phy_factor:
+            phy_factor = self.physical_factor().view(-1, 1).expand(-1, num_obj)
+            l_min_d = l_min_d * phy_factor
+        return l_min_d
 
     def loss_contact(self, obj_idx=0, v_hand=None, v_obj=None):
         # TODO phy_factor
@@ -721,16 +721,20 @@ class HOForwarderV2Impl(HOForwarderV2):
             faces_hand=self.faces_hand)
         return l_contact['contact']
 
-    def loss_collision(self, obj_idx=0, v_hand=None, v_obj=None):
+    def loss_collision(self, obj_idx=0, 
+                       v_hand=None, v_obj=None, phy_factor=True):
         """
         Returns:
-            (B,)
+            (B,1)
         """
+        assert obj_idx == 0
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_collision = compute_collision_loss(
             v_hand, v_obj[:, obj_idx], self._expand_obj_faces(self.bsize))
-        l_collision = self.physical_factor() * l_collision
+        l_collision = l_collision.view(-1, 1)
+        if phy_factor:
+            l_collision = self.physical_factor() * l_collision
         return l_collision
 
     """ Contact regions """
@@ -911,10 +915,6 @@ class HOForwarderV2Impl(HOForwarderV2):
             cfg.loss.inside.weight * l_inside +\
             cfg.loss.close.weight * l_close
 
-        if self._enable_upright and cfg.loss.obj_upright.weight > 0:
-            l_upright = self.loss_obj_upright()[self.sample_indices].sum()
-            tot_loss += cfg.loss.obj_upright.weight * l_upright
-        
         if print_metric:
             min_dist = self.loss_nearest_dist(
                 v_hand=v_hand, v_obj=v_obj).min()
@@ -926,6 +926,35 @@ class HOForwarderV2Impl(HOForwarderV2):
                 )
 
         return tot_loss
+    
+    def eval_metrics(self):
+        """ Evaluate metric on ALL frames
+
+        Returns: dict
+            -iou: (B,N)
+            -collision: (B,N)
+            -min_dist: (B,N)
+        """
+        with torch.no_grad():
+            cache_indices = self.sample_indices
+            self.sample_indices = np.arange(self.bsize)
+            # v_hand = homan.get_verts_hand()[homan.sample_indices, ...]
+            # v_obj = homan.get_verts_object()[homan.sample_indices, ...]
+            v_hand = self.get_verts_hand()
+            v_obj = self.get_verts_object()
+            _, iou, _ = self.forward_obj_pose_render(
+                v_obj=v_obj, loss_only=False)
+            collision = self.loss_collision(
+                v_hand=v_hand, v_obj=v_obj, phy_factor=False)
+            min_dist = self.loss_nearest_dist(
+                v_hand=v_hand, v_obj=v_obj)
+            self.sample_indices = cache_indices
+        metrics = {
+            'iou': iou,
+            'collision': collision,
+            'min_dist': min_dist,
+        }
+        return metrics
 
 
 from typing import List, Tuple

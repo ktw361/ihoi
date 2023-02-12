@@ -121,4 +121,4 @@ optim:
     ratio: 0.75
     vis_interval: -1  # 25
 
-    criterion: 'mask'
+    criterion: 'iou'

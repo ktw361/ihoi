@@ -16,6 +16,7 @@ from nnutils.handmocap import (
 )
 
 from obj_pose.obj_loader import OBJLoader
+from libzhifan import io
 
 from nnutils import image_utils
 from temporal.optim_plan import optimize_hand, smooth_hand_pose
@@ -162,8 +163,6 @@ def fit_scene(dataset,
     if cfg.optim.obj_part_prior:
         part_v, _ = obj_loader.load_part_by_name(cat)
         homan.set_obj_part(part_verts=part_v)
-    if cfg.optim.loss.obj_upright.weight > 0 and cat in cfg.optim.loss.obj_upright.apply_to:
-        homan._enable_upright = True
 
     homan.render_grid(obj_idx=0, with_hand=False,
                       low_reso=False, overlay_gt=True).savefig(fmt % 'input.png')
@@ -172,12 +171,13 @@ def fit_scene(dataset,
     Step 4. Optimize both hand+object mask using best object pose
     """
     save_grid = (fmt % 'optim.mp4') if cfg.save_optim_video else None
-    homan, weights, results = reinit_sample_optimize(
+    homan, weights, results, best_metric = reinit_sample_optimize(
         homan, rotation6d_inits, translation_inits, scale_inits,
         save_grid=save_grid,
         cfg=cfg.optim)
 
     homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
+    io.write_json(best_metric, (fmt % 'best_metric.json'))
     if cfg.save_pth:
         torch.save(homan, (fmt % 'model.pth'))
         torch.save(weights, (fmt % 'weights.pth'))
@@ -190,9 +190,10 @@ def fit_scene(dataset,
         action_cilp = editor.ImageSequenceClip(frames, fps=5)
         action_cilp.write_videofile(fmt % 'action.mp4')
 
-    for criterion in ['mask', 'inside', 'close']:
+    for criterion in ['iou', 'collision', 'min_dist']:
+        sign = 1 if criterion == 'iou' else -1
         final_score = \
-            torch.softmax(torch.as_tensor([- getattr(v, criterion) for v in results]), 0)
+            torch.softmax(torch.as_tensor([sign * getattr(v, criterion) for v in results]), 0)
         idx = final_score.argmax()
         R, t, s = results[idx].R, results[idx].t, results[idx].s
         homan.set_obj_transform(
