@@ -725,14 +725,21 @@ class HOForwarderV2Impl(HOForwarderV2):
                        v_hand=None, v_obj=None, phy_factor=True):
         """
         Returns:
-            (B,1)
+            (B, N)
         """
-        assert obj_idx == 0
         v_hand = self.get_verts_hand() if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
-        l_collision = compute_collision_loss(
-            v_hand, v_obj[:, obj_idx], self._expand_obj_faces(self.bsize))
-        l_collision = l_collision.view(-1, 1)
+        b, num_inits = v_obj.size(0), v_obj.size(1)
+        if obj_idx < 0:
+            l_collision = v_obj.new_empty([b, num_inits])
+            for idx in range(num_inits):
+                l = compute_collision_loss(
+                    v_hand, v_obj[:, idx], self._expand_obj_faces(self.bsize))
+                l_collision[:, idx] = l.view(-1)
+        else:
+            l_collision = compute_collision_loss(
+                v_hand, v_obj[:, obj_idx], self._expand_obj_faces(self.bsize))
+            l_collision = l_collision.view(-1, 1)
         if phy_factor:
             l_collision = self.physical_factor() * l_collision
         return l_collision
@@ -944,7 +951,7 @@ class HOForwarderV2Impl(HOForwarderV2):
             v_obj = self.get_verts_object()
             _, iou, _ = self.forward_obj_pose_render(
                 v_obj=v_obj, loss_only=False)
-            collision = self.loss_collision(
+            collision = self.loss_collision(obj_idx=-1,
                 v_hand=v_hand, v_obj=v_obj, phy_factor=False)
             min_dist = self.loss_nearest_dist(
                 v_hand=v_hand, v_obj=v_obj)

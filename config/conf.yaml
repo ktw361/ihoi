@@ -49,7 +49,7 @@ homan:
         #     num_sym_rots: 1         # Required for spiral and upright
 
         plate:
-            method: 'upright'
+            method: 'upright'         # ?
             upright_axis: '+x'
             upright_lim: 0.3
             generate_on: 'hand'       # face-up in the hand
@@ -57,9 +57,9 @@ homan:
             num_sym_rots: 1
         bowl:
             method: 'upright'
-            upright_axis: '+x'
+            upright_axis: '-z'
             upright_lim: 0.3
-            generate_on: 'hand'
+            generate_on: 'camera'       # most bowls are still face-up towards camera
             num_sphere_pts: 40
             num_sym_rots: 1
         bottle:
