@@ -196,10 +196,12 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
                          with_contact=True,
                          weights=None,
                          vis_interval=-1,
-                         vis=False,
-                         save_grid=True,
-                         writer=None):
-                         
+                         save_grid: str = None):
+    """
+    Args:
+        save_grid: str, fname to save the optimization process
+    """
+
     if hasattr(homan, 'info'):
         info = homan.info
         prefix = f'{info.vid}_{info.gt_frame}'
@@ -209,7 +211,7 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
             'params': [
                 homan.rotations_object,  # (1,)
                 homan.translations_object,
-                homan.scale_object,
+                # homan.scale_object,
             ],
             'lr': lr
         }
@@ -223,7 +225,7 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
 
         sample_indices = choose_with_softmax(
             weights, temperature=temperature, ratio=ratio)
-        print(f"Sample {sample_indices} at epoch {e}, weights = {weights.tolist()}")
+        # print(f"Sample {sample_indices} at epoch {e}, weights = {weights.tolist()}")
 
         with tqdm.tqdm(total=num_iters) as loop:
             for step in range(num_iters):
@@ -235,22 +237,15 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
                 l_obj_dict = homan.forward_obj_pose_render(
                     sample_indices=sample_indices)  # (B,N)
                 l_obj_mask = l_obj_dict['mask']
-                l_obj_offscreen = l_obj_dict['offscreen']
-                # l_contact = homan.loss_chamfer(
-                #     v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices)
-                l_contact = homan.loss_contact_prior(
-                    v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices).sum()
-                # l_collision = homan.loss_collision().sum()
-                # l_depth = homan.loss_ordinal_depth(v_hand=v_hand, v_obj=v_obj)
+                l_inside = homan.loss_insideness(
+                    v_hand=v_hand, v_obj=v_obj, sample_indices=sample_indices)
+                l_inside = l_inside.sum()
                 min_dist = homan.loss_nearest_dist(v_hand=v_hand, v_obj=v_obj).min()
 
                 # Accumulate
                 l_obj_mask = l_obj_mask.sum()
-                # l_obj_offscreen = torch.zeros_like((0.1 * l_obj_offscreen.sum()))
-                # l_depth = torch.zeros_like(l_depth)
-                # l_contact = torch.zeros_like(100 * l_contact)
                 if with_contact:
-                    tot_loss = l_obj_mask  + l_contact #+ l_collision
+                    tot_loss = l_obj_mask + l_inside
                 else:
                     tot_loss = l_obj_mask
 
@@ -261,29 +256,20 @@ def sampled_obj_optimize(homan: HOForwarderV2Vis,
                 if vis_interval > 0 and step % vis_interval == 0:
                     print(
                         f"obj_mask:{l_obj_mask.item():.3f} "
-                        # f"obj_offscrn:{l_obj_offscreen.item():.3f} "
-                        # f"depth:{l_depth.item():.3f} "
-                        f"contact:{l_contact.item():.3f} "
-                        # f"collision:{l_collision.item():.3f} "
+                        f"inside:{l_inside.item():.3f} "
                         f"min_dist: {min_dist:.3f} "
                         )
-                    if writer is None:
-                        if vis:
-                            _ = homan.render_grid(obj_idx=0, low_reso=True)
-                    else:
-                        img = homan.render_grid_np(obj_idx=0)
-                        writer.add_image(tag=f'{prefix}', 
-                                        img_tensor=img.transpose(2, 0, 1),
-                                        global_step=step)
 
                 tot_loss.backward()
                 optimizer.step()
                 loop.set_description(f"tot_loss: {tot_loss.item():.3g}")
                 loop.update()
-    
+
         # Update weights
         weights[sample_indices] -= tot_loss
 
     if save_grid:
-        return homan, weights, out_frames
+        editor.ImageSequenceClip(
+            [v*255 for v in out_frames], fps=15).write_videofile(save_grid)
+
     return homan, weights
