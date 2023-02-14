@@ -140,7 +140,7 @@ class ClipInfo(NamedTuple):
 class DataElement(NamedTuple):
     images: list 
     hand_bbox_dicts: list 
-    side_return: str 
+    side: str 
     obj_bboxes: torch.Tensor
     hand_masks: torch.Tensor 
     object_masks: torch.Tensor 
@@ -368,7 +368,7 @@ class EpicClipDatasetV3(Dataset):
         element = DataElement(
             images=images,
             hand_bbox_dicts=hand_bbox_dicts,
-            side_return=side_return,
+            side=side_return,
             obj_bboxes=obj_bbox_arrs,
             hand_masks=hand_masks,
             object_masks=object_masks,

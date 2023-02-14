@@ -1,19 +1,36 @@
 from typing import Tuple
 import os.path as osp
 from hydra.utils import to_absolute_path
+import numpy as np
 import torch
 
 import pytorch3d.transforms.rotation_conversions as rot_cvt
 from handmocap.hand_mocap_api import HandMocap
 from handmocap.hand_bbox_detector import HandBboxDetector
 
-from nnutils import geom_utils
+from datasets.epic_clip_v3 import DataElement
+from nnutils import geom_utils, image_utils
 from nnutils.hand_utils import ManopthWrapper
+from config.epic_constants import (
+    IMG_HEIGHT, IMG_WIDTH, FRANKMOCAP_INPUT_SIZE, REND_SIZE,
+)
 
 from libzhifan.geometry import BatchCameraManager
 
-from config.epic_constants import IMG_HEIGHT, IMG_WIDTH, FRANKMOCAP_INPUT_SIZE
 
+""" Hand Predictor """
+
+def get_handmocap_predictor(
+        mocap_dir='externals/frankmocap',
+        checkpoint_hand='extra_data/hand_module/pretrained_weights/pose_shape_best.pth',
+        smpl_dir='extra_data/smpl/',
+    ):
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    hand_mocap = HandMocap(to_absolute_path(osp.join(mocap_dir, checkpoint_hand)),
+        to_absolute_path(osp.join(mocap_dir, smpl_dir)), device = device)
+    return hand_mocap
+
+__hand_predictor = get_handmocap_predictor()
 
 """ ManopthWrapper"""
 
@@ -52,18 +69,7 @@ def get_hand_faces(side: str) -> torch.Tensor:
     return get_hand_wrapper(side).hand_faces
 
 
-""" HandMocap and HandBboxDetector"""
-
-def get_handmocap_predictor(
-        mocap_dir='externals/frankmocap',
-        checkpoint_hand='extra_data/hand_module/pretrained_weights/pose_shape_best.pth',
-        smpl_dir='extra_data/smpl/',
-    ):
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    hand_mocap = HandMocap(to_absolute_path(osp.join(mocap_dir, checkpoint_hand)),
-        to_absolute_path(osp.join(mocap_dir, smpl_dir)), device = device)
-    return hand_mocap
-
+""" HandBboxDetector """
 
 def collate_mocap_hand(mocap_predictions: list,
                        side: str,
@@ -195,3 +201,73 @@ def cam_from_bbox(hand_bbox,
     global_cam = hand_cam.resize(hand_h, hand_w).uncrop(
         hand_bbox, img_height, img_width)
     return hand_cam, global_cam
+
+
+def extract_forwarder_input(data_elem: DataElement,
+                            ihoi_box_expand,
+                            hand_predictor=None,
+                            device='cuda'):
+    """
+    1. Run frankmocap predictor
+    2. Extract wrist poses and finger poses.
+    3. Extract hand mask, w/ squaring and resizing
+    4. Extract Object Mask Patch
+    """
+    images = data_elem.images
+    hand_bbox_dicts = data_elem.hand_bbox_dicts
+    side = data_elem.side
+    obj_bboxes = data_elem.obj_bboxes
+    hand_masks = data_elem.hand_masks
+    object_masks = data_elem.object_masks
+    cat = data_elem.cat
+    global_cam = data_elem.global_camera
+
+    """ Process all hands """
+    if hand_predictor is None:
+        hand_predictor = __hand_predictor
+    mocap_predictions = []
+    for img, hand_dict in zip(images, hand_bbox_dicts):
+        mocap_pred = hand_predictor.regress(
+            img[..., ::-1], [hand_dict]
+        )
+        mocap_predictions += mocap_pred
+    one_hands = collate_mocap_hand(mocap_predictions, side)
+
+    """ Extract mocap_output """
+    pred_hand_full_pose, pred_hand_betas, pred_camera = map(
+        lambda x: torch.as_tensor(one_hands[x], device=device),
+        ('pred_hand_pose', 'pred_hand_betas', 'pred_camera'))
+    hand_bbox_proc = one_hands['bbox_processed']
+    rot_axisang = pred_hand_full_pose[:, :3]
+    pred_hand_pose = pred_hand_full_pose[:, 3:]
+    mano_pca_pose = recover_pca_pose(pred_hand_pose, side)
+
+    hand_sz = torch.ones_like(global_cam.fx) * 224
+    hand_cam = global_cam.crop(hand_bbox_proc).resize(new_w=hand_sz, new_h=hand_sz)
+    hand_rotation_6d, hand_translation = compute_hand_transform(
+        rot_axisang, pred_hand_pose, pred_camera, side,
+        hand_cam=hand_cam)
+
+    """ Extract mask input """
+    rend_size = REND_SIZE
+    USE_HAND_BBOX = True
+    hand_bboxes = torch.as_tensor(np.stack([v[side] for v in hand_bbox_dicts]))
+    bbox_squared = image_utils.square_bbox_xywh(
+        hand_bboxes if USE_HAND_BBOX else obj_bboxes, ihoi_box_expand).int()
+    obj_mask_patch = image_utils.batch_crop_resize(
+        object_masks, bbox_squared, rend_size)
+    hand_mask_patch = image_utils.batch_crop_resize(
+        hand_masks, bbox_squared, rend_size)
+    image_patch = image_utils.batch_crop_resize(
+        images, bbox_squared, rend_size)
+    ihoi_h = torch.ones([len(global_cam)]) * rend_size
+    ihoi_w = torch.ones([len(global_cam)]) * rend_size
+    ihoi_cam = global_cam.crop(bbox_squared).resize(ihoi_h, ihoi_w)
+
+
+    ihoi_cam_nr_mat = ihoi_cam.to_nr(return_mat=True)
+    ihoi_cam_mat = ihoi_cam.get_K()
+    return ihoi_cam_nr_mat, ihoi_cam_mat, image_patch, \
+        hand_rotation_6d, hand_translation, \
+        mano_pca_pose, pred_hand_betas, \
+        hand_mask_patch, obj_mask_patch

@@ -20,12 +20,10 @@ hydra:
 dataset:
     version: 'v3'  # 'v2 # image_sets: '/home/skynet/Zhifan/data/epic_analysis/gt_clips.json'
     image_sets: ???  # '/home/skynet/Zhifan/epic_analysis/hos/tools/model-input-Feb03.json'
-    sample_frames: 30
+    sample_frames: ???
 
 preprocess:
     ihoi_box_expand: 0.3  # 1.0
-    ihoi_img_size: 224
-    rend_size: 256
 
 homan:
     optimize_hand: True 
@@ -94,6 +92,7 @@ homan:
     rotation_regularization: False  # TODO, NotImplmented
     scale_regularization: False
 
+optim_method: ???                     # 'reinit' / 'multiview'
 optim:
     loss:
         mask:
@@ -117,8 +116,12 @@ optim:
     epoch_tqdm: True
     num_iters: 50
     iter_tqdm: False
-    temperature: 10
-    ratio: 0.75
+    temperature: 10                 # Required for reinit
+    ratio: 0.75                     # Required for reinit
     vis_interval: -1  # 25
+
+    multiview:
+        num_source: 100
+        num_eval: 25
 
     criterion: 'iou'

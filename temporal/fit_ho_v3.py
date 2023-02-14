@@ -6,23 +6,21 @@ import torch
 import logging
 from moviepy import editor
 import matplotlib.pyplot as plt
+
 from datasets.epic_clip import EpicClipDataset
 from datasets.epic_clip_v3 import EpicClipDatasetV3
+from obj_pose.obj_loader import OBJLoader
 from homan.ho_forwarder_v2 import HOForwarderV2Vis
 from nnutils.handmocap import (
-    get_handmocap_predictor,
-    collate_mocap_hand,
-    recover_pca_pose, compute_hand_transform,
+    get_handmocap_predictor, extract_forwarder_input
 )
-
-from obj_pose.obj_loader import OBJLoader
-from libzhifan import io
-
-from nnutils import image_utils
-from temporal.optim_plan import optimize_hand, smooth_hand_pose
-from temporal.optim_plan import reinit_sample_optimize
+from temporal.optim_plan import (
+    optimize_hand, smooth_hand_pose, reinit_sample_optimize
+)
 from temporal.utils import init_6d_obj_pose_v2
 from temporal.visualize import make_compare_video
+
+from libzhifan import io
 
 
 @hydra.main(config_path='../config', config_name='conf')
@@ -30,14 +28,17 @@ def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
     log = logging.getLogger(__name__)
 
+    assert cfg.optim_method != 'multiview', "Please fit_mvho.py"
+    sample_frames = cfg.dataset.sample_frames
     if cfg.dataset.version == 'v2':
         dataset = EpicClipDataset(
             image_sets=cfg.dataset.image_sets,
-            sample_frames=cfg.dataset.sample_frames)
+            sample_frames=sample_frames)
     elif cfg.dataset.version == 'v3':
         dataset = EpicClipDatasetV3(
             image_sets=cfg.dataset.image_sets,
-            sample_frames=cfg.dataset.sample_frames)
+            sample_frames=sample_frames,
+            show_loading_time=True)
 
     obj_loader = OBJLoader()
     hand_predictor = get_handmocap_predictor()
@@ -66,52 +67,20 @@ def fit_scene(dataset,
     """
     device = 'cuda'
     info = dataset.data_infos[index]
+    data_elem = dataset[index]
+
     images, hand_bbox_dicts, side, obj_bboxes, \
-        hand_masks, obj_masks, cat, global_cam = dataset[index]
+        hand_masks, obj_masks, cat, global_cam = data_elem
 
-    """ Process all hands """
-    mocap_predictions = []
-    for img, hand_dict in zip(images, hand_bbox_dicts):
-        mocap_pred = hand_predictor.regress(
-            img[..., ::-1], [hand_dict]
-        )
-        mocap_predictions += mocap_pred
-    one_hands = collate_mocap_hand(mocap_predictions, side)
-
-    """ Extract mocap_output """
-    pred_hand_full_pose, pred_hand_betas, pred_camera = map(
-        lambda x: torch.as_tensor(one_hands[x], device=device),
-        ('pred_hand_pose', 'pred_hand_betas', 'pred_camera'))
-    hand_bbox_proc = one_hands['bbox_processed']
-    rot_axisang, pred_hand_pose = pred_hand_full_pose[:,
-                                                      :3], pred_hand_full_pose[:, 3:]
-    mano_pca_pose = recover_pca_pose(pred_hand_pose, side)
-
-    hand_sz = torch.ones_like(global_cam.fx) * 224
-    hand_cam = global_cam.crop(hand_bbox_proc).resize(new_w=hand_sz, new_h=hand_sz)
-    hand_rotation_6d, hand_translation = compute_hand_transform(
-        rot_axisang, pred_hand_pose, pred_camera, side,
-        hand_cam=hand_cam)
-
-    """ Extract mask input """
-    ihoi_box_expand = cfg.preprocess.ihoi_box_expand
-    rend_size = cfg.preprocess.rend_size
-    USE_HAND_BBOX = True
-    hand_bboxes = torch.as_tensor(np.stack([v[side] for v in hand_bbox_dicts]))
-    bbox_squared = image_utils.square_bbox_xywh(
-        hand_bboxes if USE_HAND_BBOX else obj_bboxes, ihoi_box_expand).int()
-    obj_mask_patch = image_utils.batch_crop_resize(
-        obj_masks, bbox_squared, rend_size)
-    hand_mask_patch = image_utils.batch_crop_resize(
-        hand_masks, bbox_squared, rend_size)
-    image_patch = image_utils.batch_crop_resize(
-        images, bbox_squared, rend_size)
-    ihoi_h = torch.ones([len(global_cam)]) * rend_size
-    ihoi_w = torch.ones([len(global_cam)]) * rend_size
-    ihoi_cam = global_cam.crop(bbox_squared).resize(ihoi_h, ihoi_w)
+    ihoi_cam_nr_mat, ihoi_cam_mat, image_patch, \
+        hand_rotation_6d, hand_translation, \
+        mano_pca_pose, pred_hand_betas, hand_mask_patch, obj_mask_patch = \
+        extract_forwarder_input(
+            data_elem, ihoi_box_expand=cfg.preprocess.ihoi_box_expand,
+            device=device)
 
     homan = HOForwarderV2Vis(
-        camintr=ihoi_cam.to_nr(return_mat=True),
+        camintr=ihoi_cam_nr_mat,
         ihoi_img_patch=image_patch,
     )
     homan.set_hand_params(
@@ -144,7 +113,7 @@ def fit_scene(dataset,
         rot_init = cfg.homan.rot_init[cat]
         rotation6d_inits, translation_inits, scale_inits = init_6d_obj_pose_v2(
             obj_bboxes, homan.get_verts_hand(), vertices,
-            global_cam_mat=global_cam.get_K(), local_cam_mat=ihoi_cam.get_K(),
+            global_cam_mat=global_cam.get_K(), local_cam_mat=ihoi_cam_mat,
             rot_init=rot_init,
             transl_init_method=cfg.homan.transl_init_method,
             scale_init_method=cfg.homan.scale_init_method,
@@ -177,6 +146,7 @@ def fit_scene(dataset,
         cfg=cfg.optim)
 
     homan.to_scene(show_axis=False).export((fmt % 'mesh.obj'))
+    best_metric['cat'] = cat
     io.write_json(best_metric, (fmt % 'best_metric.json'))
     if cfg.save_pth:
         torch.save(homan, (fmt % 'model.pth'))
@@ -185,7 +155,7 @@ def fit_scene(dataset,
 
     if cfg.action_video.save:
         frames = make_compare_video(
-            homan, global_cam, global_images=images, 
+            homan, global_cam, global_images=images,
             render_frames=cfg.action_video.render_frames)
         action_cilp = editor.ImageSequenceClip(frames, fps=5)
         action_cilp.write_videofile(fmt % 'action.mp4')
