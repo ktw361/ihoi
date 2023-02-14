@@ -25,14 +25,32 @@ class OBJLoader:
         bottle=0.2
     )
 
+    SUFFIX = dict(
+        V1=dict(
+            plate=1000,
+            can=1000,
+            cup=1000,
+            mug=1000,
+            bowl=2000,
+            bottle=1000
+        ),
+        V2=dict(
+            plate=500,
+            can=500,
+            cup=1000,
+            mug=1000,
+            bowl=500,
+            bottle=500
+        )
+    )
 
     def __init__(self,
                  obj_models_root='./weights/obj_models',
-                 load_simplified=True):
+                 suffix='V2'):
         self.obj_models_root = to_absolute_path(obj_models_root)
         self.obj_parts_root = to_absolute_path('./weights')
         self.obj_models_cache = dict()
-        self.load_simplified = load_simplified
+        self.suffix = self.SUFFIX[suffix]
 
     def load_obj_by_name(self, name, return_mesh=False):
         """
@@ -45,10 +63,8 @@ class OBJLoader:
                 `vertices` and `faces`
         """
         if name not in self.obj_models_cache:
-            if self.load_simplified:
-                obj_name = f"{name}_simplified.obj"
-            else:
-                obj_name = f"{name}.obj"
+            suffix = self.suffix[name]
+            obj_name = f"{name}_{suffix}.obj"
             obj_path = os.path.join(self.obj_models_root, obj_name)
             obj_scale = self.OBJ_SCALES[name]
             obj = trimesh.load(obj_path, force='mesh')

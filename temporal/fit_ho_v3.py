@@ -11,9 +11,7 @@ from datasets.epic_clip import EpicClipDataset
 from datasets.epic_clip_v3 import EpicClipDatasetV3
 from obj_pose.obj_loader import OBJLoader
 from homan.ho_forwarder_v2 import HOForwarderV2Vis
-from nnutils.handmocap import (
-    get_handmocap_predictor, extract_forwarder_input
-)
+from nnutils.handmocap import extract_forwarder_input
 from temporal.optim_plan import (
     optimize_hand, smooth_hand_pose, reinit_sample_optimize
 )
@@ -41,15 +39,14 @@ def main(cfg: DictConfig) -> None:
             show_loading_time=True)
 
     obj_loader = OBJLoader()
-    hand_predictor = get_handmocap_predictor()
 
     if cfg.debug_index is not None:
-        fit_scene(dataset, hand_predictor, obj_loader, cfg.debug_index, cfg=cfg)
+        fit_scene(dataset, obj_loader, cfg.debug_index, cfg=cfg)
         return
 
     for index in tqdm.trange(cfg.index_from, min(cfg.index_to, len(dataset))):
         try:
-            fit_scene(dataset, hand_predictor, obj_loader, index, cfg=cfg)
+            fit_scene(dataset, obj_loader, index, cfg=cfg)
             log.info(f"Succeed at index [{index}]: {dataset.data_infos[index]}")
         except Exception as e:
             log.info(f"Failed at index [{index}]: {dataset.data_infos[index]}. Reason: {e}")
@@ -57,7 +54,6 @@ def main(cfg: DictConfig) -> None:
 
 
 def fit_scene(dataset,
-              hand_predictor,
               obj_loader: OBJLoader,
               index: int,
               cfg: DictConfig = None):
