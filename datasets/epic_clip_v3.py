@@ -1,12 +1,11 @@
 from typing import NamedTuple, List, Union
 from argparse import ArgumentParser
 import pickle, json
-import os, re, bisect
+import os, re, bisect, time
 from PIL import Image
 from pathlib import Path
 import numpy as np
 import torch
-
 from torch.utils.data import Dataset
 
 from config.epic_constants import HAND_MASK_KEEP_EXPAND, EPIC_HOA_SIZE, VISOR_SIZE
@@ -159,6 +158,7 @@ class EpicClipDatasetV3(Dataset):
                  hand_expansion=0.4,
                  crop_hand_mask=True,
                  sample_frames=20,
+                 show_loading_time=False,
                  *args,
                  **kwargs):
         """_summary_
@@ -180,6 +180,7 @@ class EpicClipDatasetV3(Dataset):
         self.crop_hand_mask = crop_hand_mask
         self.sample_frames = sample_frames
         self.cat_data_mapping = io.read_json(cat_data_mapping)
+        self.show_loading_time = show_loading_time
 
         # Locate frame in davis formatted folders
         self.locator = PairLocator()
@@ -301,13 +302,15 @@ class EpicClipDatasetV3(Dataset):
             hand_masks: (N, H, W)
             cat: str, object categroy
         """
+        if self.show_loading_time:
+            _start_time = time.time()
         info = self.data_infos[index]
         vid, cat, visor_name, side, start, end = \
             info.vid, info.cat, info.visor_name, info.side, info.start, info.end
 
         valid_frames = self._keep_frame_with_boxes(vid, start, end, side, cat)
-        if self.sample_frames < 0 and len(valid_frames) > 100:
-            raise NotImplementedError(f"frames more than 100 : {len(valid_frames)}.")
+        if self.sample_frames < 0 and len(valid_frames) > 500:
+            raise NotImplementedError(f"frames more than 500 : {len(valid_frames)}.")
         elif self.sample_frames < 0 or (len(valid_frames) < self.sample_frames):
             frames = valid_frames
         else:
@@ -372,6 +375,8 @@ class EpicClipDatasetV3(Dataset):
             cat=cat,
             global_camera=batch_global_cam
         )
+        if self.show_loading_time:
+            print(f"Data Loading time (s): {time.time() - _start_time}")
         return element
 
 
