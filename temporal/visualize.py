@@ -1,8 +1,7 @@
 from typing import List
 import matplotlib.pyplot as plt
 import numpy as np
-from homan.ho_forwarder_v2 import HOForwarderV2, HOForwarderV2Vis
-from moviepy import editor
+from homan.ho_forwarder_v2 import HOForwarderV2Vis
 
 from libzhifan.geometry import visualize_mesh, SimpleMesh
 from libzhifan.geometry import BatchCameraManager

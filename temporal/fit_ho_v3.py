@@ -133,7 +133,7 @@ def fit_scene(dataset,
                       low_reso=False, overlay_gt=True).savefig(fmt % 'input.png')
 
     """
-    Step 4. Optimize both hand+object mask using best object pose
+    Step 3. Optimize both hand+object mask using best object pose
     """
     save_grid = (fmt % 'optim.mp4') if cfg.save_optim_video else None
     homan, weights, results, best_metric = reinit_sample_optimize(

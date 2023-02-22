@@ -108,7 +108,7 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
     """ Compute random rotation, then estimate scale, then estimate z/depth, then xy
     Args:
         bboxes: (T, 4) xywh, T stands for Time 
-        verts: (T, V, 3)
+        verts_hand: (T, V, 3)
         verts: (V, 3)
         global_cam_mat: (T, 3, 3) 
         local_cam_mat: (T, 3, 3) 
@@ -191,19 +191,25 @@ def init_6d_obj_pose_v2(global_bboxes: torch.Tensor,
 def estimate_obj_scale(bboxes: torch.Tensor,
                        vh: torch.Tensor,
                        vo: torch.Tensor,
-                       global_cam_mat: torch.Tensor):
+                       global_cam_mat: torch.Tensor,
+                       debug: bool = False):
     """ Estimate scale of obj verts s.t.
         est_scale * Vo_3d / Vh_3d = box_diagonal / hand_proj_diagonal
 
     Args:
         bboxes: (T, 4) xywh, T stands for Time. Target boxes to match
         vh: (T, V, 3)
-        vh: (T, N_init, V, 3) allow N_init verts
+        vo: (T, N_init, V, 3) allow N_init verts
         cam_mat: (T, 3, 3)
 
     Returns:
         estimated_scale: (N_init,)
     """
+    if debug:
+        print(f"bboxes.shape: {bboxes.shape}")
+        print(f"vh.shape: {vh.shape}")
+        print(f"vo.shape: {vo.shape}")
+        print(f"global_cam_mat.shape: {global_cam_mat.shape}")
     global_cam_mat = global_cam_mat.to(vo.device)
     bboxes = bboxes.to(vo.device)
     diag = (bboxes[:, 2]**2 + bboxes[:, 3]**2).sqrt()  # (T,)

@@ -204,7 +204,7 @@ def cam_from_bbox(hand_bbox,
 
 
 def extract_forwarder_input(data_elem: DataElement,
-                            ihoi_box_expand,
+                            ihoi_box_expand: float,
                             hand_predictor=None,
                             device='cuda'):
     """
