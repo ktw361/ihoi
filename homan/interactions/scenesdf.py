@@ -92,13 +92,13 @@ class SDFSceneLoss(nn.Module):
                 verts_centered = verts - boxes_center
                 verts_centered_scaled = verts_centered / boxes_scale.view(
                     verts_centered.shape[0], 1, 1)
-                assert (verts_centered_scaled.min() >= -1)
-                assert (verts_centered_scaled.max() <= 1)
+                assert (verts_centered_scaled.min() >= -1), f'(verts_centered_scaled.min() = {verts_centered_scaled.min()} >= -1'
+                assert (verts_centered_scaled.max() <= 1), f'(verts_centered_scaled.max() = {verts_centered_scaled.max()} <= 1'
                 faces = getattr(self, f"faces{obj_idx}")
                 phi = self.sdf(faces, verts_centered_scaled.contiguous())
                 # Keep only inside values
                 phi = phi.clamp(0)
-                assert (phi.min() >= 0)
+                assert (phi.min() >= 0), f'(phi.min() = {phi.min()} >= 0'
                 obj_phis.append(phi)
 
         pair_idxs = list(permutations(list(range(self.num_objects)), 2))

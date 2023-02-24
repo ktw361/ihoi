@@ -69,7 +69,8 @@ def generate_rotations_o2h(rot_init: dict,
     Args:
         rot_init: dict
             -generate_on: 'camera' or 'hand'
-        base_rotations: (1, 3, 3) apply to col-vec. hand-to-camera rotations.
+        base_rotations: apply to col-vec. hand-to-camera rotations. 
+            (1, 3, 3) or (num_inits, 3, 3)
     
     Returns:
         (rot_o2h, rot_cam): (B, 3, 3) apply to col-vec.
@@ -79,7 +80,7 @@ def generate_rotations_o2h(rot_init: dict,
     generate_on = rot_init['generate_on']
     rots = generate_rotations(rot_init, device)
     if generate_on == 'camera':
-        assert base_rotations.shape == (1, 3, 3)
+        assert base_rotations.shape == (1, 3, 3) or base_rotations.shape == rots.shape
         # Assuming col-vec
         # Solution to: R_camera = R_{base to camera} @ R_{object to base}
         # is R_o2h = R_base.T @ R_world

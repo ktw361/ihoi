@@ -3,6 +3,9 @@ from collections import namedtuple
 import tqdm
 import torch
 
+from temporal.optim_plan import (
+    optimize_hand, smooth_hand_pose
+)
 from homan.mvho_forwarder import MVHOVis, LiteHandModule
 from nnutils.handmocap import extract_forwarder_input
 
@@ -30,14 +33,18 @@ class EvalHelper:
         self.eval_image_patch = None
         self.eval_target_masks_object = None
 
+        self.movie_global_cam = None  # For make_compare_video
+        self.movie_images = None
+
     @staticmethod
-    def get_eval_data(eval_dataset, index, cfg, side):
+    def get_eval_data(eval_dataset, index, cfg, side, 
+                      optimize_eval_hand=True):
         """ Get eval data 
         Args:
             cfg: full config
         """
         eval_input = eval_dataset[index]
-        # images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat, global_cam = input_data
+        images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat, global_cam = eval_input
 
         eval_ihoi_cam_nr_mat, eval_ihoi_cam_mat, eval_image_patch, \
         eval_hand_rotation_6d, eval_hand_translation, \
@@ -53,12 +60,19 @@ class EvalHelper:
             side, eval_mano_pca_pose, eval_pred_hand_betas, eval_hand_mask_patch)
         eval_hand.set_hand_params(eval_hand_params)
 
+        if optimize_eval_hand:
+            print('Eval: Smooth hand pose and optimize hand')
+            eval_hand = smooth_hand_pose(eval_hand, lr=0.1)
+            eval_hand = optimize_hand(eval_hand, verbose=False)
+
         eval_inds = torch.arange(num_eval).view(-1, 1)
         eval_hand_data = eval_hand[ eval_inds ]
         eval_target_masks_object = eval_hand.gather0d(eval_obj_mask_patch, eval_inds)
-        return eval_hand_data, eval_image_patch, eval_target_masks_object
+        return eval_hand_data, eval_image_patch, eval_target_masks_object, \
+            global_cam, images
 
-    def set_eval_data(self, eval_dataset, index, cfg, side):
+    def set_eval_data(self, eval_dataset, index, cfg, side, 
+                      optimize_eval_hand=True):
         """
         Args:
             eval_dataset: EpicClipV3
@@ -66,8 +80,10 @@ class EvalHelper:
             cfg: full cfg
             side: str
         """
-        self.eval_hand_data, self.eval_image_patch, self.eval_target_masks_object = \
-            EvalHelper.get_eval_data(eval_dataset, index, cfg, side)
+        self.eval_hand_data, self.eval_image_patch, self.eval_target_masks_object,\
+            self.movie_global_cam, self.movie_images = \
+            EvalHelper.get_eval_data(
+                eval_dataset, index, cfg, side, optimize_eval_hand)
         self.num_eval = min(cfg.optim_multiview.num_eval, len(self.eval_image_patch))
 
     def register_batch(self,
@@ -119,6 +135,11 @@ class EvalHelper:
             scale_object=s)
         # homan._check_shape_object(1)
         return homan, best_metric
+    
+    def make_compare_video(self, homan):
+        frames = homan.make_compare_video(
+            self.movie_global_cam, global_images=self.movie_images, pose_idx=0)
+        return frames
 
 
 def multiview_optimize(homan: MVHOVis,

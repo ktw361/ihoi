@@ -78,6 +78,17 @@ class LiteHandModule(nn.Module):
         super().__init__()
         self.mask_size = REND_SIZE
 
+        self.renderer = nr.renderer.Renderer(
+            image_size=self.mask_size,
+            K=None,
+            R=torch.eye(3, device='cuda')[None],
+            t=torch.zeros([1, 3], device='cuda'),
+            orig_size=1)
+        self.renderer.light_direction = [1, 0.5, 1]
+        self.renderer.light_intensity_direction = torch.as_tensor(0.3)
+        self.renderer.light_intensity_ambient = 0.5
+        self.renderer.background_color = [1.0, 1.0, 1.0]
+
     @staticmethod
     def gather0d(source, indices: torch.Tensor):
         """ 
@@ -224,6 +235,87 @@ class LiteHandModule(nn.Module):
         check_shape(self.translations_hand, (bsize, 1, 3))
         # ordinal loss
         check_shape(self.masks_human, (bsize, 1, self.mask_size, self.mask_size))
+
+    def forward_hand(self,
+                     loss_weights={
+                         'sil': 1,
+                         'pca': 1,
+                         'rot': 10,
+                         'transl': 1,
+                     }) -> Tuple[torch.Tensor, dict]:
+        l_sil = self.loss_sil_hand(compute_iou=False, func='iou').sum()
+        l_pca = self.loss_pca_interpolation().sum()
+        l_rot = self.loss_hand_rot().sum()
+        l_transl = self.loss_hand_transl().sum()
+        losses = {
+            'sil': l_sil,
+            'pca': l_pca,
+            'rot': l_rot,
+            'transl': l_transl,
+        }
+        for k, l in losses.items():
+            losses[k] = l * loss_weights[k]
+        total_loss = sum([v for v in losses.values()])
+        return total_loss, losses
+
+    def loss_pca_interpolation(self) -> torch.Tensor:
+        """
+        Interpolation Prior: pose(t) = (pose(t+1) + pose(t-1)) / 2
+
+        Returns: (L-2,)
+        """
+        target = (self.mano_pca_pose[2:] + self.mano_pca_pose[:-2]) / 2
+        pred = self.mano_pca_pose[1:-1]
+        loss = torch.sum((target - pred)**2, dim=(1))
+        return loss
+
+    def loss_hand_rot(self) -> torch.Tensor:
+        """ Interpolation loss for hand rotation """
+        device = self.rotations_hand.device
+        rotmat = self.rot_mat_hand
+        # with torch.no_grad():
+        rot_mid = roma.rotmat_slerp(
+            rotmat[2:], rotmat[:-2],
+            torch.as_tensor([0.5], device=device))[0]
+        loss = rotation_loss_v1(rot_mid, rotmat[1:-1])
+        return loss
+
+    def loss_hand_transl(self) -> torch.Tensor:
+        """
+        Returns: (L-2,)
+        """
+        interp = (self.translations_hand[2:] + self.translations_hand[:-2]) / 2
+        pred = self.translations_hand[1:-1]
+        loss = torch.sum((interp - pred)**2, dim=(1, 2))
+        return loss
+
+    def loss_sil_hand(self, compute_iou=False, func='iou'):
+        """ returns: (B,) """
+        rend = self.renderer(
+            self.get_verts_hand(),
+            self.faces_hand,
+            K=self.camintr,
+            mode="silhouettes")
+        image = self.keep_mask_hand * rend
+        if func == 'l2':
+            loss_sil = torch.sum(
+                (image - self.ref_mask_hand)**2, dim=(1, 2))
+            loss_sil = loss_sil / self.keep_mask_hand.sum(dim=(1,2))
+        elif func == 'iou':
+            loss_sil = iou_loss(image, self.ref_mask_hand)
+        elif func == 'l2_iou':
+            loss_sil = torch.sum(
+                (image - self.ref_mask_hand)**2, dim=(1, 2))
+            loss_sil = loss_sil / self.keep_mask_hand.sum(dim=(1,2))
+            with torch.no_grad():
+                iou_factor = iou_loss(image, self.ref_mask_hand, post='rev')
+            loss_sil = loss_sil * iou_factor
+
+        # loss_sil = loss_sil / self.bsize
+        if compute_iou:
+            ious = batch_mask_iou(image, self.ref_mask_hand)
+            return loss_sil, ious
+        return loss_sil
 
 
 class MVHO(nn.Module):
@@ -1074,14 +1166,19 @@ class MVHOVis(MVHOImpl):
                      with_hand=True, overlay_gt=False,
                      **mesh_kwargs) -> np.ndarray:
         """ returns: (H, W, 3) """
-        nt_ind = pose_idx * self.train_size + scene_idx
+        # nt_ind = pose_idx * self.train_size + scene_idx
+        nt_ind = scene_idx
         if not with_hand:
             img = self.ihoi_img_patch[nt_ind] / 255
         else:
             mhand, mobj = self.get_meshes(pose_idx=pose_idx,
                 scene_idx=scene_idx, **mesh_kwargs)
+            if pose_idx < 0:
+                mesh_list = [mhand]
+            else:
+                mesh_list = [mhand, mobj]
             img = projection.perspective_projection_by_camera(
-                [mhand, mobj],
+                mesh_list,
                 CameraManager.from_nr(
                     self.camintr.detach().cpu().numpy()[nt_ind], self.vis_rend_size),
                 method=dict(

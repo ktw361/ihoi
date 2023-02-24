@@ -1,3 +1,4 @@
+import os
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import tqdm
@@ -38,17 +39,21 @@ def main(cfg: DictConfig) -> None:
         sample_frames=cfg.optim_multiview.num_eval,
         show_loading_time=True)
 
-    np.random.seed(0)
-    torch.random.manual_seed(0)
-
+    if cfg.debug_locate is not None:
+        index = dataset.locate_index_from_output(cfg.debug_locate)
+        fit_scene(dataset, eval_dataset, index, cfg=cfg)
+        return
     if cfg.debug_index is not None:
         fit_scene(dataset, eval_dataset, cfg.debug_index, cfg=cfg)
         return
 
     for index in tqdm.trange(cfg.index_from, min(cfg.index_to, len(dataset))):
         try:
-            fit_scene(dataset, eval_dataset, index, cfg=cfg)
-            log.info(f"Succeed at index [{index}]: {dataset.data_infos[index]}")
+            r = fit_scene(dataset, eval_dataset, index, cfg=cfg)
+            if r is not None:
+                log.info(f"{r} at index [{index}]: {dataset.data_infos[index]}")
+            else:
+                log.info(f"Succeed at index [{index}]: {dataset.data_infos[index]}")
         except Exception as e:
             log.info(f"Failed at index [{index}]: {dataset.data_infos[index]}. Reason: {e}")
             continue
@@ -87,11 +92,20 @@ def fit_scene(dataset,
     Args:
         cfg: see config/conf.yaml
     """
+    np.random.seed(0)
+    torch.random.manual_seed(0)
+
     device = 'cuda'
     info = dataset.data_infos[index]
+    fmt = f'{info.vid}_{info.start}_{info.end}_%s'
+    if os.path.exists(fmt % 'model.pth'):
+        return 'skip'
     input_data = dataset[index]
     images, hand_bbox_dicts, side, obj_bboxes, \
         hand_masks, obj_masks, cat, global_cam = input_data
+    if len(images) < 20:
+        print(f'Skip {info.vid} due to too few frames ({len(images)})')
+        return 'skip too few frames'
 
     # ihoi_cam_mat and image_path set in prepare_input()
     ihoi_cam_nr_mat, ihoi_cam_mat, image_patch, \
@@ -100,7 +114,6 @@ def fit_scene(dataset,
         extract_forwarder_input(
             input_data, ihoi_box_expand=cfg.preprocess.ihoi_box_expand)
 
-    fmt = f'{info.vid}_{info.start}_{info.end}_%s'
     """ Frankmocap on all source frames """
     lite_hand = LiteHandModule()
     lite_hand_params = LiteHandModule.LiteHandParams(
@@ -108,15 +121,23 @@ def fit_scene(dataset,
         side, mano_pca_pose, pred_hand_betas, hand_mask_patch)
     lite_hand.set_hand_params(lite_hand_params)
     # Step 1: Interpolate pca_pose Step 2: Optimize hand_mask
-    # homan = smooth_hand_pose(homan, lr=0.1)
-    # if cfg.homan.optimize_hand:
-    #     homan = optimize_hand(homan, verbose=False)
+    if cfg.homan.optimize_hand:
+        print('Smooth hand pose and optimize hand')
+        lite_hand = smooth_hand_pose(lite_hand, lr=0.1)
+        lite_hand = optimize_hand(lite_hand, verbose=False)
 
     optim_cfg = cfg.optim_multiview
     """ Get training indices"""
     num_source = len(ihoi_cam_nr_mat)
+
     num_inits_parallel = optim_cfg.num_inits_parallel
-    num_inits = ObjectPoseInitializer.read_num_inits(cfg.homan.rot_init[cat])
+
+    if cat == 'cup' or cat == 'mug':
+        num_inits_parallel = num_inits_parallel // 2
+    rot_init = cfg.homan.rot_init[cat]
+    if rot_init['method'] == 'sphere' or rot_init['method'] == 'upright':
+        rot_init['num_sphere_pts'] = optim_cfg.num_inits // rot_init['num_sym_rots']
+    num_inits = ObjectPoseInitializer.read_num_inits(rot_init)
     train_size = optim_cfg.train_size
     src_inds = torch.ones([num_inits, num_source]).multinomial(
         train_size, replacement=False)
@@ -129,12 +150,13 @@ def fit_scene(dataset,
     init_input = InitializerInput.prepare_input(
         hand_data, input_data, train_size=train_size, src_inds=src_inds)
     obj_initializer = ObjectPoseInitializer(
-        cfg.homan.rot_init[cat], cfg.homan.scale_init_method,
+        rot_init, cfg.homan.scale_init_method,
         cfg.homan.transl_init_method)
     R_o2h_6d, translation_inits, scale_inits = obj_initializer.init_pose(init_input)
 
     eval_helper = EvalHelper()
-    eval_helper.set_eval_data(eval_dataset, index, cfg, side)
+    eval_helper.set_eval_data(eval_dataset, index, cfg, side,
+                              optimize_eval_hand=cfg.homan.optimize_eval_hand)
 
     """ optimize(homan.obj_poses) """
     homan = MVHOVis()  # homan.set_ihoi_img_patch(image_patch)
@@ -163,6 +185,7 @@ def fit_scene(dataset,
         homan, optim_cfg.criterion)
     homan.render_grid(pose_idx=0, with_hand=False,
                       low_reso=False, overlay_gt=True).savefig(fmt % 'eval.png')
+    plt.clf()
     homan.to_scene(pose_idx=0, show_axis=False).export((fmt % 'mesh.obj'))
     io.write_json(best_metric, (fmt % 'best_metric.json'))
     if cfg.save_pth:

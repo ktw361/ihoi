@@ -94,7 +94,7 @@ homan:
 
 optim_method: ???                     # 'reinit' / 'multiview'
 optim:
-    loss:
+    loss: 
         mask:
             weight: 1.0
         inside:
@@ -118,19 +118,6 @@ optim:
     iter_tqdm: False
     temperature: 10                 # Required for reinit
     ratio: 0.75                     # Required for reinit
-    vis_interval: -1  # 25
-
-    criterion: 'iou'
-
-optim_multiview:
-    num_source: 100
-    num_eval: 30
-    num_inits_parallel: 40  # num_inits is computed from rot_init
-    train_size: 3
-
-    # per epoch
-    lr: 1e-2
-    num_iters: 50
     vis_interval: -1  # 25
 
     criterion: 'iou'
