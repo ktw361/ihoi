@@ -135,7 +135,7 @@ def fit_scene(dataset,
     if cat == 'cup' or cat == 'mug':
         num_inits_parallel = num_inits_parallel // 2
     rot_init = cfg.homan.rot_init[cat]
-    if rot_init['method'] == 'sphere' or rot_init['method'] == 'upright':
+    if rot_init['method'] == 'spiral' or rot_init['method'] == 'upright':
         rot_init['num_sphere_pts'] = optim_cfg.num_inits // rot_init['num_sym_rots']
     num_inits = ObjectPoseInitializer.read_num_inits(rot_init)
     train_size = optim_cfg.train_size
@@ -193,8 +193,7 @@ def fit_scene(dataset,
         torch.save([list(v) for v in eval_helper.eval_results], (fmt % 'results.pth'))
 
     if cfg.action_video.save:
-        frames = homan.make_compare_video(
-            global_cam, global_images=images, pose_idx=0)
+        frames = eval_helper.make_compare_video(homan)
         action_cilp = editor.ImageSequenceClip(frames, fps=5)
         action_cilp.write_videofile(fmt % 'action.mp4')
 

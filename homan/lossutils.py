@@ -30,6 +30,10 @@ def compute_collision_loss(verts_hand,
     Returns:
         sdf_loss: (B,)
     """
+    if torch.isnan(verts_object.max()) or torch.isnan(verts_hand.max()) or \
+        torch.isnan(verts_object.min()) or torch.isnan(verts_hand.min()):
+        invalid = verts_object.new_ones(verts_object.shape[0]) * 1e6
+        return invalid
     hand_nb = verts_hand.shape[0] // verts_object.shape[0]
     mano_faces = faces_object[0].new(MANO_CLOSED_FACES)
     if hand_nb > 1:
