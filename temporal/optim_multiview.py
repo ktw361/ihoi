@@ -106,13 +106,13 @@ class EvalHelper:
                 metrics = homan.eval_metrics()
 
             iou = metrics['iou']                # bigger better
-            collision = metrics['collision']    # smaller better
+            # collision = metrics['collision']    # smaller better
             min_dist = metrics['min_dist']      # smaller better
             mean_iou = iou.mean(0)
-            mean_collision = collision.mean(0)
+            # mean_collision = collision.mean(0)
             mean_min_dist = min_dist.mean(0)
             element = ElementType(
-                mean_iou.item(), mean_collision.item(), mean_min_dist.item(),
+                mean_iou.item(), 0, mean_min_dist.item(),
                 R_train[[i]], T_train[[i]], s_train[[i]], None)
             self.eval_results.append(element)
 
@@ -125,15 +125,16 @@ class EvalHelper:
             torch.softmax(torch.as_tensor([sign * getattr(v, criterion) for v in results]), 0)
 
         best_idx = final_score.argmax()
-        best_metric = {
-            'iou': results[best_idx].iou, 'collision': results[best_idx].collision,
-            'min_dist': results[best_idx].min_dist}
         R, t, s = results[best_idx].R, results[best_idx].t, results[best_idx].s
         homan.set_obj_transform(
             translations_object=t,
             rotations_object=R,
             scale_object=s)
-        # homan._check_shape_object(1)
+        pen_depth = homan.penetration_depth().mean().item()
+        best_metric = {
+            'iou': results[best_idx].iou, 
+            'pen_depth': pen_depth,
+            'min_dist': results[best_idx].min_dist}
         return homan, best_metric
     
     def make_compare_video(self, homan):

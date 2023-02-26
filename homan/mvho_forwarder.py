@@ -15,6 +15,7 @@ from nnutils.mesh_utils_extra import compute_vert_normals
 from homan.contact_prior import get_contact_regions
 from homan.homan_ManoModel import HomanManoModel
 from homan.ho_utils import compute_transformation_persp
+from homan.interactions import scenesdf
 
 from homan.lossutils import (
     compute_ordinal_depth_loss, compute_contact_loss,
@@ -753,6 +754,21 @@ class MVHOImpl(MVHO):
             l_collision = self.physical_factor() * l_collision
         return l_collision
 
+    def penetration_depth(self):
+        """
+        Returns:
+            (N*T)
+        """
+        f_hand = self.faces_hand[0]
+        f_obj = self.faces_object
+        v_hand = self.v_hand
+        v_obj = self.get_verts_object()
+
+        sdfl = scenesdf.SDFSceneLoss([f_hand, f_obj])
+        sdf_loss, sdf_meta = sdfl([v_hand, v_obj])
+        max_depths = sdf_meta['dist_values'][(1, 0)].max(1)[0]
+        return max_depths
+
     """ Contact regions """
 
     def loss_obj_upright(self) -> torch.Tensor:
@@ -908,7 +924,7 @@ class MVHOImpl(MVHO):
         v_obj = self.get_verts_object()  # (N*T, V, 3)
 
         l_obj_dict = self.forward_obj_pose_render(
-            v_obj=v_obj)  # (N*T)
+            v_obj=v_obj, func=optim_cfg.obj_sil_func)  # (N*T)
         l_obj_mask = l_obj_dict['mask'].sum()
 
         if hasattr(optim_cfg, 'obj_part_prior') and optim_cfg.obj_part_prior:
@@ -949,7 +965,6 @@ class MVHOImpl(MVHO):
 
         Returns: dict
             -iou: (N*T)
-            -collision: (N*T)
             -min_dist: (N*T)
         """
         with torch.no_grad():
@@ -957,13 +972,14 @@ class MVHOImpl(MVHO):
             v_obj = self.get_verts_object()
             _, iou, _ = self.forward_obj_pose_render(
                 v_obj=v_obj, loss_only=False)
-            collision = self.loss_collision(
-                v_hand=v_hand, v_obj=v_obj, phy_factor=False)
+            # collision = iou.new_zeros(iou.size())
+            # collision = self.loss_collision(
+            #     v_hand=v_hand, v_obj=v_obj, phy_factor=False)
             min_dist = self.loss_nearest_dist(
                 v_hand=v_hand, v_obj=v_obj)
         metrics = {
             'iou': iou,
-            'collision': collision,
+            # 'collision': collision,
             'min_dist': min_dist,
         }
         return metrics

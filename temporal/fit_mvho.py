@@ -15,7 +15,6 @@ from temporal.optim_plan import (
     optimize_hand, smooth_hand_pose
 )
 from temporal.obj_initializer import ObjectPoseInitializer, InitializerInput
-from temporal.visualize import make_compare_video
 from temporal.optim_multiview import (
     EvalHelper, multiview_optimize
 )
@@ -97,6 +96,8 @@ def fit_scene(dataset,
 
     device = 'cuda'
     info = dataset.data_infos[index]
+    if cfg.only_cat is not None and info.cat != cfg.only_cat:
+        return 'skip cat'
     fmt = f'{info.vid}_{info.start}_{info.end}_%s'
     if os.path.exists(fmt % 'model.pth'):
         return 'skip'
@@ -197,7 +198,8 @@ def fit_scene(dataset,
         action_cilp = editor.ImageSequenceClip(frames, fps=5)
         action_cilp.write_videofile(fmt % 'action.mp4')
 
-    for criterion in ['iou', 'collision', 'min_dist']:
+    # for criterion in ['iou', 'collision', 'min_dist']:
+    for criterion in ['iou', 'min_dist']:
         homan, best_metric = eval_helper.decide_best_homan(
             homan, criterion)
         fig = homan.render_grid(pose_idx=0, with_hand=True, low_reso=False)

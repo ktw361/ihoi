@@ -187,6 +187,13 @@ def upright_spiral(num_sphere_pts, num_sym_rots,
             [0, 1, 0],
             [0, 0, 1]
         ]).view(-1, 3, 3)
+    elif to_axis == '-y':
+        # x -> x, y -> -y, z -> -z
+        R_axis = R_upright.new_tensor([
+            [1, 0, 0],
+            [0, -1, 0],
+            [0, 0, -1]
+        ]).view(-1, 3, 3)
     elif to_axis == '-z':
         # x -> x, y -> -z, z -> y
         R_axis = R_upright.new_tensor([
