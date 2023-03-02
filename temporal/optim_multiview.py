@@ -10,7 +10,7 @@ from homan.mvho_forwarder import MVHOVis, LiteHandModule
 from nnutils.handmocap import extract_forwarder_input
 
 ElementType = namedtuple(
-    "ElementType", "iou collision min_dist R t s sample_indices")
+    "ElementType", "iou collision max_min_dist R t s sample_indices")
 
 
 class EvalHelper:
@@ -31,9 +31,9 @@ class EvalHelper:
         self.movie_images = None
 
     @staticmethod
-    def get_eval_data(eval_dataset, index, cfg, side, 
+    def get_eval_data(eval_dataset, index, cfg, side,
                       optimize_eval_hand=True):
-        """ Get eval data 
+        """ Get eval data
         Args:
             cfg: full config
         """
@@ -65,7 +65,7 @@ class EvalHelper:
         return eval_hand_data, eval_image_patch, eval_target_masks_object, \
             global_cam, images
 
-    def set_eval_data(self, eval_dataset, index, cfg, side, 
+    def set_eval_data(self, eval_dataset, index, cfg, side,
                       optimize_eval_hand=True):
         """
         Args:
@@ -100,19 +100,21 @@ class EvalHelper:
                 metrics = homan.eval_metrics()
 
             iou = metrics['iou']                # bigger better
-            # collision = metrics['collision']    # smaller better
-            min_dist = metrics['min_dist']      # smaller better
             mean_iou = iou.mean(0)
-            # mean_collision = collision.mean(0)
-            mean_min_dist = min_dist.mean(0)
+            # collision = metrics['collision']    # smaller better
+            max_min_dist = metrics['max_min_dist'] # smaller better
             element = ElementType(
-                mean_iou.item(), 0, mean_min_dist.item(),
+                mean_iou.item(), 0, max_min_dist,
                 R_train[[i]], T_train[[i]], s_train[[i]], None)
             self.eval_results.append(element)
 
     def decide_best_homan(self,
                           homan: MVHOVis,
                           criterion: str):
+        """
+        Args:
+            criterion: 'iou' or 'pd_h2o' or 'pd_o2h', 'max_min_dist'
+        """
         results = self.eval_results
         sign = 1 if criterion == 'iou' else -1
         final_score = \
@@ -124,13 +126,16 @@ class EvalHelper:
             translations_object=t,
             rotations_object=R,
             scale_object=s)
-        pen_depth = homan.penetration_depth().mean().item()
+        pd_h2o, pd_o2h = homan.penetration_depth()
+        pd_h2o = pd_h2o.max().item()
+        pd_o2h = pd_o2h.max().item()
         best_metric = {
-            'iou': results[best_idx].iou, 
-            'pen_depth': pen_depth,
-            'min_dist': results[best_idx].min_dist}
+            'iou': results[best_idx].iou,
+            'pd_h2o': pd_h2o,
+            'pd_o2h': pd_o2h,
+            'max_min_dist': results[best_idx].max_min_dist}
         return homan, best_metric
-    
+
     def make_compare_video(self, homan):
         frames = homan.make_compare_video(
             self.movie_global_cam, global_images=self.movie_images, pose_idx=0)
@@ -173,7 +178,6 @@ def multiview_optimize(homan: MVHOVis,
             print_metric = (vis_interval > 0 and step % vis_interval == 0)
             tot_loss = homan.train_loss(
                 optim_cfg=optim_cfg, print_metric=print_metric)
-            # TODO: manual set loss=0 no grad?
 
             if torch.isnan(tot_loss) or torch.isinf(tot_loss):
                 break

@@ -150,12 +150,16 @@ def read_v3_mask_with_occlusion(path: str,
     if occlude_all:
         unique_ids = np.unique(np.asarray(mask))
         for c in unique_ids:
-            if c == 0:
+            if c == 0:  # bg
                 continue
             mask_obj[mask == c] = -1
+            if c != side_id:
+                mask_hand[mask == c] = -1
     else:
         mask_obj[mask_hand == 1] = -1
+        mask_hand[mask_obj == 1] = -1
     mask_obj[mask == cid] = 1
+    # mask_hand[mask_hand == side_id] = -1
         
     return mask_hand, mask_obj
 

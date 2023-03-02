@@ -244,7 +244,7 @@ class LiteHandModule(nn.Module):
                          'rot': 10,
                          'transl': 1,
                      }) -> Tuple[torch.Tensor, dict]:
-        l_sil = self.loss_sil_hand(compute_iou=False, func='iou').sum()
+        l_sil = self.loss_sil_hand(compute_iou=False, func='l2').sum()
         l_pca = self.loss_pca_interpolation().sum()
         l_rot = self.loss_hand_rot().sum()
         l_transl = self.loss_hand_transl().sum()
@@ -290,7 +290,7 @@ class LiteHandModule(nn.Module):
         loss = torch.sum((interp - pred)**2, dim=(1, 2))
         return loss
 
-    def loss_sil_hand(self, compute_iou=False, func='iou'):
+    def loss_sil_hand(self, compute_iou=False, func='l2'):
         """ returns: (B,) """
         rend = self.renderer(
             self.get_verts_hand(),
@@ -369,12 +369,16 @@ class MVHO(nn.Module):
         self.register_buffer(
             'camintr',
             hand_data.camintr.detach().clone().requires_grad_(False))
-        self.register_buffer(
-            'rotations_hand',
-            hand_data.rotations_hand.detach().clone().requires_grad_(False))
-        self.register_buffer(
-            'translations_hand',
-            hand_data.translations_hand.detach().clone().requires_grad_(False))
+        self.rotations_hand = nn.Parameter(
+            hand_data.rotations_hand.detach().clone(), requires_grad=True)
+        self.translations_hand = nn.Parameter(
+            hand_data.translations_hand.detach().clone(), requires_grad=True)
+        # self.register_buffer(
+        #     'rotations_hand',
+        #     hand_data.rotations_hand.detach().clone().requires_grad_(False))
+        # self.register_buffer(
+        #     'translations_hand',
+        #     hand_data.translations_hand.detach().clone().requires_grad_(False))
         self.register_buffer(
             'v_hand',
             hand_data.v_hand_global.detach().clone().requires_grad_(False))
@@ -729,7 +733,8 @@ class MVHOImpl(MVHO):
         Args:
             v_hand: (N*T, V, 3)
             v_obj: (N*, V, 3)
-        returns (N*T) """
+        returns (N*T) 
+        """
         v_hand = self.v_hand if v_hand is None else v_hand
         v_obj = self.get_verts_object() if v_obj is None else v_obj
         l_min_d = compute_nearest_dist(v_obj, v_hand)
@@ -737,6 +742,17 @@ class MVHOImpl(MVHO):
             phy_factor = self.physical_factor()
             l_min_d = l_min_d * phy_factor
         return l_min_d
+
+    def max_min_dist(self, v_hand=None, v_obj=None) -> float:
+        """ max of min_dist over temporal dimension
+        Args:
+            v_hand: (N*T, V, 3)
+            v_obj: (N*, V, 3)
+        """
+        v_hand = self.v_hand if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        max_min_d = compute_nearest_dist(v_obj, v_hand).max()
+        return max_min_d.item()
 
     def loss_collision(self,
                        v_hand=None, v_obj=None, phy_factor=True):
@@ -952,13 +968,13 @@ class MVHOImpl(MVHO):
             optim_cfg.loss.close.weight * l_close
 
         if print_metric:
-            min_dist = self.loss_nearest_dist(
-                v_hand=v_hand, v_obj=v_obj).min()
+            max_min_dist = self.loss_nearest_dist(
+                v_hand=v_hand, v_obj=v_obj).max()
             print(
                 f"obj_mask:{l_obj_mask.item():.3f} "
                 f"inside:{l_inside.item():.3f} "
                 f"close:{l_close.item():.3f} "
-                f"min_dist: {min_dist:.3f} "
+                f"max_min_dist: {max_min_dist:.3f} "
                 )
 
         return tot_loss
@@ -968,22 +984,18 @@ class MVHOImpl(MVHO):
 
         Returns: dict
             -iou: (N*T)
-            -min_dist: (N*T)
+            -max_min_dist: scalar
         """
         with torch.no_grad():
             v_hand = self.v_hand
             v_obj = self.get_verts_object()
             _, iou, _ = self.forward_obj_pose_render(
                 v_obj=v_obj, loss_only=False)
-            # collision = iou.new_zeros(iou.size())
-            # collision = self.loss_collision(
-            #     v_hand=v_hand, v_obj=v_obj, phy_factor=False)
-            min_dist = self.loss_nearest_dist(
+            max_min_dist = self.max_min_dist(
                 v_hand=v_hand, v_obj=v_obj)
         metrics = {
             'iou': iou,
-            # 'collision': collision,
-            'min_dist': min_dist,
+            'max_min_dist': max_min_dist,
         }
         return metrics
 

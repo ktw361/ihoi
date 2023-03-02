@@ -99,12 +99,12 @@ def fit_scene(dataset,
     if cfg.only_cat is not None and info.cat != cfg.only_cat:
         return 'skip cat'
     fmt = f'{info.vid}_{info.start}_{info.end}_%s'
-    if os.path.exists(fmt % 'model.pth'):
+    if cfg.skip_existing and os.path.exists(fmt % 'model.pth'):
         return 'skip'
     input_data = dataset[index]
     images, hand_bbox_dicts, side, obj_bboxes, \
         hand_masks, obj_masks, cat, global_cam = input_data
-    if len(images) < 20:
+    if len(images) < 10:
         print(f'Skip {info.vid} due to too few frames ({len(images)})')
         return 'skip too few frames'
 
@@ -198,8 +198,7 @@ def fit_scene(dataset,
         action_cilp = editor.ImageSequenceClip(frames, fps=5)
         action_cilp.write_videofile(fmt % 'action.mp4')
 
-    # for criterion in ['iou', 'collision', 'min_dist']:
-    for criterion in ['iou', 'min_dist']:
+    for criterion in ['iou', 'max_min_dist']:
         homan, best_metric = eval_helper.decide_best_homan(
             homan, criterion)
         fig = homan.render_grid(pose_idx=0, with_hand=True, low_reso=False)

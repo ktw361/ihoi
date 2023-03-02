@@ -21,6 +21,26 @@ def combine_verts(verts_list):
     verts_combined = torch.cat(all_verts_list, 1)
     return verts_combined
 
+def combine_meshes(verts_list, faces_list):
+    """
+    Args:
+        verts_list: [ (B, V1, 3), (B, V2, 3), ... ]
+        faces_list: [ (B, F1, 3), (B, F2, 3), ... ]
+    Returns:
+        verts_combined: (B, V1+V2+..., 3)
+        faces_combined: (B, F1+F2+..., 3)
+    """
+    batch_size = verts_list[0].shape[0]
+    all_verts_list = [v.reshape(batch_size, -1, 3) for v in verts_list]
+    verts_combined = torch.cat(all_verts_list, 1)
+    num_verts = torch.as_tensor([v.shape[1] for v in all_verts_list], dtype=torch.long)
+    all_faces_list = []
+    for i, f in enumerate(faces_list):
+        f = f + num_verts[:i].sum()
+        all_faces_list.append(f)
+    faces_combined = torch.cat(all_faces_list, 1)
+    return verts_combined, faces_combined
+
 
 def center_vertices(vertices, faces, flip_y=True):
     """

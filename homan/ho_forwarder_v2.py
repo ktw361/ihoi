@@ -15,6 +15,7 @@ from homan.contact_prior import get_contact_regions
 from homan.homan_ManoModel import HomanManoModel
 from homan.ho_utils import (
     compute_transformation_ortho, compute_transformation_persp)
+from homan.utils.geometry import combine_meshes
 
 from homan.interactions import scenesdf
 from homan.lossutils import (
@@ -380,10 +381,11 @@ class HOForwarderV2Impl(HOForwarderV2):
     def sample_indices(self, value):
         self._sample_indices = value
 
-    def loss_sil_hand(self, compute_iou=False, func='iou'):
+    def loss_sil_hand(self, v_hand=None, compute_iou=False, func='l2'):
         """ returns: (B,) """
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
         rend = self.renderer(
-            self.get_verts_hand(),
+            v_hand,
             self.faces_hand,
             K=self.camintr,
             mode="silhouettes")
@@ -490,7 +492,7 @@ class HOForwarderV2Impl(HOForwarderV2):
                          'transl': 1,
                         #  'smooth': 10,
                      }) -> Tuple[torch.Tensor, dict]:
-        l_sil = self.loss_sil_hand(compute_iou=False, func='iou').sum()
+        l_sil = self.loss_sil_hand(compute_iou=False, func='l2').sum()
         l_pca = self.loss_pca_interpolation().sum()
         l_rot = self.loss_hand_rot().sum()
         l_transl = self.loss_hand_transl().sum()
@@ -673,6 +675,35 @@ class HOForwarderV2Impl(HOForwarderV2):
         too_far = torch.max(coord_z - self.renderer.far, zeros).sum(dim=(1, 2))
         loss = lower_right + upper_left + behind + too_far  # (B*N)
         return loss.view(b, n)
+    
+    """ joint rendering """
+    def register_combined_target(self):
+        self.register_buffer(
+            "ref_mask_ho", self.ref_mask_object + self.ref_mask_hand)
+        self.register_buffer(
+            "keep_mask_ho", ((self.keep_mask_object + self.keep_mask_hand) > 0).float())
+    
+    def forward_combined_sil(self, v_hand=None, v_obj=None):
+        """ returns: (B,) """
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        v_obj = v_obj[:, 0, ...]
+        f_obj_batch = self.faces_object[None, ...].expand(v_obj.size(0), -1, 3)
+        v_comb, f_comb = combine_meshes(
+            [v_hand, v_obj], [self.faces_hand, f_obj_batch])
+        rend = self.renderer(
+            v_comb,
+            f_comb,
+            K=self.camintr,
+            mode="silhouettes")
+        image = self.keep_mask_ho * rend
+
+        """ func == 'l2' """
+        loss_sil = torch.sum(
+            (image - self.ref_mask_ho)**2, dim=(1, 2))
+        loss_sil = loss_sil / self.keep_mask_ho.sum(dim=(1,2))
+
+        return loss_sil
 
     """ Hand-Object interaction """
 
@@ -756,6 +787,19 @@ class HOForwarderV2Impl(HOForwarderV2):
             phy_factor = self.physical_factor().view(-1, 1).expand(-1, num_obj)
             l_min_d = l_min_d * phy_factor
         return l_min_d
+
+    def max_min_dist(self, v_hand=None, v_obj=None) -> float:
+        """ max of min_dist over temporal dimension
+        Args:
+            v_hand: (T, V, 3)
+            v_obj: (T, 1, V, 3)
+        """
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        assert v_obj.size(1) == 1
+        v_obj = v_obj[:, 0, ...]
+        max_min_d = compute_nearest_dist(v_obj, v_hand).max()
+        return max_min_d.item()
 
     def loss_contact(self, obj_idx=0, v_hand=None, v_obj=None):
         # TODO phy_factor
@@ -1013,33 +1057,43 @@ class HOForwarderV2Impl(HOForwarderV2):
 
         return tot_loss
     
-    def eval_metrics(self):
+    def eval_metrics(self, unsafe=False, avg=False):
         """ Evaluate metric on ALL frames
 
         Returns: dict
-            -iou: (B,N)
-            -collision: (B,N)
+            -h_iou: (B,N)
+            -o_iou: (B,N)
             -min_dist: (B,N)
         """
         with torch.no_grad():
             cache_indices = self.sample_indices
             self.sample_indices = np.arange(self.bsize)
-            # v_hand = homan.get_verts_hand()[homan.sample_indices, ...]
-            # v_obj = homan.get_verts_object()[homan.sample_indices, ...]
             v_hand = self.get_verts_hand()
             v_obj = self.get_verts_object()
-            _, iou, _ = self.forward_obj_pose_render(
+            _, hious = self.loss_sil_hand(v_hand=v_hand, compute_iou=True)
+            _, oious, _ = self.forward_obj_pose_render(
                 v_obj=v_obj, loss_only=False)
-            collision = self.loss_collision(obj_idx=-1,
-                v_hand=v_hand, v_obj=v_obj, phy_factor=False)
-            min_dist = self.loss_nearest_dist(
+            max_min_dist = self.max_min_dist(
                 v_hand=v_hand, v_obj=v_obj)
             self.sample_indices = cache_indices
+            if unsafe:
+                pd_h2o, pd_o2h = self.penetration_depth()
+                pd_h2o = pd_h2o.max().item()
+                pd_o2h = pd_o2h.max().item()
+        
+        if avg:
+            hious = hious.mean().item()
+            oious = oious.mean().item()
         metrics = {
-            'iou': iou,
-            'collision': collision,
-            'min_dist': min_dist,
+            'hious': hious,
+            'oious': oious,
+            'max_min_dist': max_min_dist,
         }
+        if unsafe:
+            metrics.update({
+                'pd_h2o': pd_h2o,
+                'pd_o2h': pd_o2h,
+            })
         return metrics
 
 

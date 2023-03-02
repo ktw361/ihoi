@@ -12,6 +12,7 @@ debug_locate: null              # str, e.g. P01_01_42472_42784
 index_from: 0
 index_to: 99999999
 only_cat: null
+skip_existing: False
 
 hydra:
     sweep:
