@@ -16,6 +16,7 @@ from homan.homan_ManoModel import HomanManoModel
 from homan.ho_utils import (
     compute_transformation_ortho, compute_transformation_persp)
 
+from homan.interactions import scenesdf
 from homan.lossutils import (
     compute_ordinal_depth_loss, compute_contact_loss,
     compute_collision_loss,
@@ -418,6 +419,15 @@ class HOForwarderV2Impl(HOForwarderV2):
         loss = torch.sum((target - pred)**2, dim=(1))
         return loss
 
+    def loss_pca_smooth(self) -> torch.Tensor:
+        """
+        Interpolation Prior: pose(t) - pose(t-1) -> 0
+
+        Returns: (B-1,)
+        """
+        loss = torch.sum((self.mano_pca_pose[1:] - self.mano_pca_pose[:-1])**2, dim=(1))
+        return loss
+
     def loss_hand_rot(self) -> torch.Tensor:
         """ Interpolation loss for hand rotation """
         device = self.rotations_hand.device
@@ -437,6 +447,40 @@ class HOForwarderV2Impl(HOForwarderV2):
         pred = self.translations_hand[1:-1]
         loss = torch.sum((interp - pred)**2, dim=(1, 2))
         return loss
+    
+    def loss_hand_smooth(self) -> torch.Tensor:
+        """ 
+        Return:
+            (L-1,) 
+        """
+        verts_hand = self.get_verts_hand(hand_space=False)
+        smooth_hand = ((verts_hand[1:] - verts_hand[:-1])**2).mean((-2, -1))
+        phy = self.physical_factor()[:-1]
+        smooth_hand = smooth_hand * phy
+        return smooth_hand
+    
+    def loss_obj_interp(self, obj_idx=0):
+        """ 
+        Return:
+            (L-1,) 
+        """
+        verts_obj = self.get_verts_object()[:, obj_idx, ...]
+        target = (verts_obj[2:] + verts_obj[:-2]) / 2
+        pred = verts_obj[1:-1]
+        l_interp = ((target - pred)**2).mean((-2, -1))
+        return l_interp
+
+    def loss_obj_smooth(self, obj_idx=0, phy_factor: bool=True):
+        """ 
+        Return:
+            (L-1,) 
+        """
+        verts_obj = self.get_verts_object()[:, obj_idx, ...]
+        smooth_obj = ((verts_obj[1:] - verts_obj[:-1])**2).mean((-2, -1))
+        if phy_factor:
+            phy = self.physical_factor()[:-1]
+            smooth_obj = smooth_obj * phy
+        return smooth_obj
 
     def forward_hand(self,
                      loss_weights={
@@ -444,16 +488,19 @@ class HOForwarderV2Impl(HOForwarderV2):
                          'pca': 1,
                          'rot': 10,
                          'transl': 1,
+                        #  'smooth': 10,
                      }) -> Tuple[torch.Tensor, dict]:
         l_sil = self.loss_sil_hand(compute_iou=False, func='iou').sum()
         l_pca = self.loss_pca_interpolation().sum()
         l_rot = self.loss_hand_rot().sum()
         l_transl = self.loss_hand_transl().sum()
+        # l_smooth = self.loss_hand_smooth().sum()
         losses = {
             'sil': l_sil,
             'pca': l_pca,
             'rot': l_rot,
             'transl': l_transl,
+            # 'smooth': l_smooth,
         }
         for k, l in losses.items():
             losses[k] = l * loss_weights[k]
@@ -744,6 +791,21 @@ class HOForwarderV2Impl(HOForwarderV2):
             l_collision = self.physical_factor() * l_collision
         return l_collision
 
+    def loss_collision_so(self, obj_idx=0, 
+                       v_hand=None, v_obj=None, phy_factor=True):
+        """ single object
+        Returns:
+            (B, N)
+        """
+        v_hand = self.get_verts_hand() if v_hand is None else v_hand
+        v_obj = self.get_verts_object() if v_obj is None else v_obj
+        l_collision = compute_collision_loss(
+            v_hand, v_obj[:, obj_idx], self._expand_obj_faces(self.bsize))
+        l_collision = l_collision.view(-1, 1)
+        if phy_factor:
+            l_collision = self.physical_factor() * l_collision
+        return l_collision
+
     """ Contact regions """
 
     def loss_obj_upright(self) -> torch.Tensor:
@@ -889,6 +951,23 @@ class HOForwarderV2Impl(HOForwarderV2):
             return trimesh.Scene([mhand, mobj])
 
         return loss
+    
+    def penetration_depth(self, obj_idx=0):
+        """
+        Returns:
+            (N*T)
+        """
+        f_hand = self.faces_hand[0]
+        f_obj = self.faces_object
+        v_hand = self.get_verts_hand(hand_space=True)
+        v_obj = self.get_verts_object(hand_space=True)[:, obj_idx, ...]
+
+        sdfl = scenesdf.SDFSceneLoss([f_hand, f_obj])
+        sdf_loss, sdf_meta = sdfl([v_hand, v_obj])
+        # max_depths = sdf_meta['dist_values'][(1, 0)].max(1)[0]
+        h_to_o = sdf_meta['dist_values'][(1, 0)].max(1)[0]
+        o_to_h = sdf_meta['dist_values'][(0, 1)].max(1)[0] 
+        return h_to_o, o_to_h
     
     """ system objectives """
     def train_loss(self, cfg, print_metric=False):

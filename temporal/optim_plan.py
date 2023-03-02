@@ -57,6 +57,7 @@ def optimize_hand(homan: HOForwarderV2Impl,
         'pca': [],
         'rot': [],
         'transl': [],
+        # 'smooth': [],
     }
     for step in range(num_steps):
         optimizer.zero_grad()
@@ -161,6 +162,9 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                 loop.update()
 
         with torch.no_grad():
+            if torch.isnan(tot_loss) or torch.isinf(tot_loss):
+                import pudb;
+                pudb.set_trace()
             metrics = homan.eval_metrics()
             iou = metrics['iou']                # bigger better
             collision = metrics['collision']    # smaller better

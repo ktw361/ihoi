@@ -757,7 +757,8 @@ class MVHOImpl(MVHO):
     def penetration_depth(self):
         """
         Returns:
-            (N*T)
+            - hand into object (N*T)
+            - object into hand
         """
         f_hand = self.faces_hand[0]
         f_obj = self.faces_object
@@ -766,8 +767,10 @@ class MVHOImpl(MVHO):
 
         sdfl = scenesdf.SDFSceneLoss([f_hand, f_obj])
         sdf_loss, sdf_meta = sdfl([v_hand, v_obj])
-        max_depths = sdf_meta['dist_values'][(1, 0)].max(1)[0]
-        return max_depths
+        # max_depths = sdf_meta['dist_values'][(1, 0)].max(1)[0]
+        h_to_o = sdf_meta['dist_values'][(1, 0)].max(1)[0]
+        o_to_h = sdf_meta['dist_values'][(0, 1)].max(1)[0] 
+        return h_to_o, o_to_h
 
     """ Contact regions """
 

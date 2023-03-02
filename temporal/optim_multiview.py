@@ -21,12 +21,6 @@ class EvalHelper:
     """
     def __init__(self):
         self.num_eval = None
-        # Don't do rolling selection, just store all results for now
-        # self.R_best = None  # (1, 6)
-        # self.T_best = None  # (1, 1, 3)
-        # self.s_best = None  # (1, 1)
-        # self.score_best = torch.as_tensor(np.inf)  # (,)
-        # self.best_index = None  # int
         self.eval_results = []
 
         self.eval_hand_data = None

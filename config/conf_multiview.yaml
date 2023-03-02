@@ -11,6 +11,7 @@ debug_index: null
 debug_locate: null              # str, e.g. P01_01_42472_42784
 index_from: 0
 index_to: 99999999
+only_cat: null
 
 hydra:
     sweep:
@@ -47,9 +48,9 @@ homan:
 
         plate:
             method: 'upright'         # ?
-            upright_axis: '+x'
+            upright_axis: '-z'          # was +x, now -y?
             upright_lim: 0.3
-            generate_on: 'hand'       # face-up in the hand
+            generate_on: 'camera'       # face-up in the hand
             num_sphere_pts: -1
             num_sym_rots: 1
         bowl:
@@ -94,15 +95,16 @@ homan:
 optim_multiview:
     num_source: 100
     num_eval: 30
-    num_inits: 400
-    num_inits_parallel: 40          # For #-verts == 500. num_inits is computed from rot_init
+    num_inits: 510
+    num_inits_parallel: 30          # For #-verts == 500, divide by 2
     train_size: 4
 
     # per epoch
     lr: 1e-2
-    num_iters: 100
+    num_iters: 50
     vis_interval: -1  # 25
     iter_tqdm: True
+    obj_sil_func: l2                # 'l2_iou', 'l2'. Before Feb-25, default is l2_iou
     loss:
         mask:
             weight: 1.0
@@ -117,6 +119,5 @@ optim_multiview:
         obj_upright:
             weight: 0
             apply_to: {'bowl'}
-
 
     criterion: 'iou'
