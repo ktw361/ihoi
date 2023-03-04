@@ -15,9 +15,9 @@ from temporal.optim_plan import (
     optimize_hand, smooth_hand_pose
 )
 from temporal.obj_initializer import ObjectPoseInitializer, InitializerInput
-from temporal.optim_multiview import (
-    EvalHelper, multiview_optimize
-)
+from temporal.optim_multiview import EvalHelper, multiview_optimize
+from temporal.post_refinement import load_homan_from_mvho, optimize_post
+from temporal.visualize import make_compare_video
 
 from libzhifan import io
 
@@ -28,14 +28,14 @@ def main(cfg: DictConfig) -> None:
     log = logging.getLogger(__name__)
 
     assert cfg.dataset.version == 'v3'
-    sample_frames = cfg.optim_multiview.num_source
+    sample_frames = cfg.optim_mv.num_source
     dataset = EpicClipDatasetV3(
         image_sets=cfg.dataset.image_sets,
         sample_frames=sample_frames,
         show_loading_time=True)
     eval_dataset = EpicClipDatasetV3(
         image_sets=cfg.dataset.image_sets,
-        sample_frames=cfg.optim_multiview.num_eval,
+        sample_frames=cfg.optim_mv.num_eval,
         show_loading_time=True)
 
     if cfg.debug_locate is not None:
@@ -127,7 +127,7 @@ def fit_scene(dataset,
         lite_hand = smooth_hand_pose(lite_hand, lr=0.1)
         lite_hand = optimize_hand(lite_hand, verbose=False)
 
-    optim_cfg = cfg.optim_multiview
+    optim_cfg = cfg.optim_mv
     """ Get training indices"""
     num_source = len(ihoi_cam_nr_mat)
 
@@ -138,8 +138,9 @@ def fit_scene(dataset,
     rot_init = cfg.homan.rot_init[cat]
     if rot_init['method'] == 'spiral' or rot_init['method'] == 'upright':
         rot_init['num_sphere_pts'] = optim_cfg.num_inits // rot_init['num_sym_rots']
+    scale_init = cfg.homan.scale_init[cat]
     num_inits = ObjectPoseInitializer.read_num_inits(rot_init)
-    train_size = optim_cfg.train_size
+    train_size = min(optim_cfg.train_size, num_source)
     src_inds = torch.ones([num_inits, num_source]).multinomial(
         train_size, replacement=False)
 
@@ -151,7 +152,7 @@ def fit_scene(dataset,
     init_input = InitializerInput.prepare_input(
         hand_data, input_data, train_size=train_size, src_inds=src_inds)
     obj_initializer = ObjectPoseInitializer(
-        rot_init, cfg.homan.scale_init_method,
+        rot_init, scale_init,
         cfg.homan.transl_init_method)
     R_o2h_6d, translation_inits, scale_inits = obj_initializer.init_pose(init_input)
 
@@ -160,48 +161,73 @@ def fit_scene(dataset,
                               optimize_eval_hand=cfg.homan.optimize_eval_hand)
 
     """ optimize(homan.obj_poses) """
-    homan = MVHOVis()  # homan.set_ihoi_img_patch(image_patch)
-    homan.register_obj_buffer(
+    mvho = MVHOVis()  # homan.set_ihoi_img_patch(image_patch)
+    mvho.register_obj_buffer(
         verts_object_og=init_input.obj_vertices,
         faces_object=init_input.obj_faces,
         scale_mode=cfg.homan.scale_mode)
     for e in tqdm.trange(num_inits // num_inits_parallel):
         nt_start = e * num_inits_parallel * train_size
         nt_end = (e+1) * num_inits_parallel * train_size
-        homan.set_size(num_inits_parallel, train_size)  # eval will set this to sth. else
-        homan.set_hand_data(hand_data[nt_start:nt_end, ...])
+        mvho.set_size(num_inits_parallel, train_size)  # eval will set this to sth. else
+        mvho.set_hand_data(hand_data[nt_start:nt_end, ...])
         n_start = e * num_inits_parallel
         n_end = (e+1) * num_inits_parallel
-        homan.set_obj_transform(
+        mvho.set_obj_transform(
             translations_object=translation_inits[n_start:n_end, ...],
             rotations_object=R_o2h_6d[n_start:n_end, ...],
             scale_object=scale_inits[n_start:n_end, ...])
-        homan.set_obj_target(
+        mvho.set_obj_target(
             target_masks_object[nt_start:nt_end, ...], check_shape=False)
 
-        homan = multiview_optimize(homan, optim_cfg)
-        eval_helper.register_batch(homan, e, num_inits_parallel)
+        mvho = multiview_optimize(mvho, optim_cfg)
+        eval_helper.register_batch(mvho, e, num_inits_parallel)
 
-    homan, best_metric = eval_helper.decide_best_homan(
-        homan, optim_cfg.criterion)
-    homan.render_grid(pose_idx=0, with_hand=False,
+    mvho, best_metric = eval_helper.decide_best_homan(
+        mvho, optim_cfg.criterion)
+
+    """ post refinement """
+    if cfg.post_refine:
+        print('Start Post refinement')
+        homan = load_homan_from_mvho(
+            eval_helper.eval_input, mvho, cfg,
+            mano_pca_pose=eval_helper.eval_mano_pca_pose,
+            mano_betas=eval_helper.eval_mano_betas)
+        homan.register_combined_target()
+        pre_metrics = homan.eval_metrics(unsafe=True, avg=True)
+        homan = optimize_post(homan, steps=200)
+        post_metrics = homan.eval_metrics(unsafe=True, avg=True)
+        torch.save(homan, (fmt % 'post.pth'))
+        io.write_json(pre_metrics, (fmt % 'pre.json'))
+        io.write_json(post_metrics, (fmt % 'post.json'))
+        print("Post refinement done")
+        if cfg.action_video.save:
+            frames = make_compare_video(
+                homan, eval_helper.eval_input.global_camera, 
+                global_images=eval_helper.eval_input.images,
+                render_frames='all')
+            action_cilp = editor.ImageSequenceClip(frames, fps=5)
+            action_cilp.write_videofile(fmt % 'post.mp4')
+
+    """ saving """
+    mvho.render_grid(pose_idx=0, with_hand=False,
                       low_reso=False, overlay_gt=True).savefig(fmt % 'eval.png')
     plt.clf()
-    homan.to_scene(pose_idx=0, show_axis=False).export((fmt % 'mesh.obj'))
+    # mvho.to_scene(pose_idx=0, show_axis=False).export((fmt % 'mesh.obj'))
     io.write_json(best_metric, (fmt % 'best_metric.json'))
     if cfg.save_pth:
-        torch.save(homan, (fmt % 'model.pth'))
-        torch.save([list(v) for v in eval_helper.eval_results], (fmt % 'results.pth'))
+        torch.save(mvho, (fmt % 'model.pth'))
+        # torch.save([list(v) for v in eval_helper.eval_results], (fmt % 'results.pth'))
 
     if cfg.action_video.save:
-        frames = eval_helper.make_compare_video(homan)
+        frames = eval_helper.make_compare_video(mvho)
         action_cilp = editor.ImageSequenceClip(frames, fps=5)
-        action_cilp.write_videofile(fmt % 'action.mp4')
+        action_cilp.write_videofile(fmt % 'pre.mp4')
 
     for criterion in ['iou', 'max_min_dist']:
-        homan, best_metric = eval_helper.decide_best_homan(
-            homan, criterion)
-        fig = homan.render_grid(pose_idx=0, with_hand=True, low_reso=False)
+        mvho, best_metric = eval_helper.decide_best_homan(
+            mvho, criterion)
+        fig = mvho.render_grid(pose_idx=0, with_hand=True, low_reso=False)
         fig.savefig(fmt % f'output_{criterion}.png')
         plt.close(fig)
 

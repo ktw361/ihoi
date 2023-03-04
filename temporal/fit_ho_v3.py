@@ -156,7 +156,7 @@ def fit_scene(dataset,
         action_cilp = editor.ImageSequenceClip(frames, fps=5)
         action_cilp.write_videofile(fmt % 'action.mp4')
 
-    for criterion in ['iou', 'collision', 'min_dist']:
+    for criterion in ['iou', 'max_min_dist']:
         sign = 1 if criterion == 'iou' else -1
         final_score = \
             torch.softmax(torch.as_tensor([sign * getattr(v, criterion) for v in results]), 0)

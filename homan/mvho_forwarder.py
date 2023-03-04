@@ -594,7 +594,7 @@ class MVHOImpl(MVHO):
     def forward_obj_pose_render(self,
                                 v_obj,
                                 loss_only=True,
-                                func='l2_iou') -> dict:
+                                func='l2') -> dict:
         """ Reimplement the PoseRenderer.foward()
 
         Args:

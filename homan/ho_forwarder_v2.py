@@ -450,15 +450,19 @@ class HOForwarderV2Impl(HOForwarderV2):
         loss = torch.sum((interp - pred)**2, dim=(1, 2))
         return loss
     
-    def loss_hand_smooth(self) -> torch.Tensor:
+    def loss_hand_smooth(self, hand_space=False, phy_factor=True) -> torch.Tensor:
         """ 
+        Args:
+            hand_space: set True for pca
+
         Return:
             (L-1,) 
         """
-        verts_hand = self.get_verts_hand(hand_space=False)
+        verts_hand = self.get_verts_hand(hand_space=hand_space)
         smooth_hand = ((verts_hand[1:] - verts_hand[:-1])**2).mean((-2, -1))
-        phy = self.physical_factor()[:-1]
-        smooth_hand = smooth_hand * phy
+        if phy_factor:
+            phy = self.physical_factor()[:-1]
+            smooth_hand = smooth_hand * phy
         return smooth_hand
     
     def loss_obj_interp(self, obj_idx=0):

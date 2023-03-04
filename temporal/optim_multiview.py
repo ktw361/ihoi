@@ -23,6 +23,10 @@ class EvalHelper:
         self.num_eval = None
         self.eval_results = []
 
+        self.eval_input = None
+        self.eval_mano_pca_pose = None
+        self.eval_mano_betas = None
+
         self.eval_hand_data = None
         self.eval_image_patch = None
         self.eval_target_masks_object = None
@@ -30,8 +34,7 @@ class EvalHelper:
         self.movie_global_cam = None  # For make_compare_video
         self.movie_images = None
 
-    @staticmethod
-    def get_eval_data(eval_dataset, index, cfg, side,
+    def get_eval_data(self, eval_dataset, index, cfg, side,
                       optimize_eval_hand=True):
         """ Get eval data
         Args:
@@ -39,13 +42,14 @@ class EvalHelper:
         """
         eval_input = eval_dataset[index]
         images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat, global_cam = eval_input
+        self.eval_input = eval_input
 
         eval_ihoi_cam_nr_mat, eval_ihoi_cam_mat, eval_image_patch, \
         eval_hand_rotation_6d, eval_hand_translation, \
         eval_mano_pca_pose, eval_pred_hand_betas, eval_hand_mask_patch, eval_obj_mask_patch = \
             extract_forwarder_input(
                 eval_input, ihoi_box_expand=cfg.preprocess.ihoi_box_expand)
-        num_eval = min(cfg.optim_multiview.num_eval, len(eval_ihoi_cam_nr_mat))
+        num_eval = min(cfg.optim_mv.num_eval, len(eval_ihoi_cam_nr_mat))
 
         # Frankmocap on all eval frames
         eval_hand = LiteHandModule()
@@ -58,6 +62,9 @@ class EvalHelper:
             print('Eval: Smooth hand pose and optimize hand')
             eval_hand = smooth_hand_pose(eval_hand, lr=0.1)
             eval_hand = optimize_hand(eval_hand, verbose=False)
+
+        self.eval_mano_pca_pose = eval_hand.mano_pca_pose.detach().clone()
+        self.eval_mano_betas = eval_hand.mano_betas.detach().clone()
 
         eval_inds = torch.arange(num_eval).view(-1, 1)
         eval_hand_data = eval_hand[ eval_inds ]
@@ -76,9 +83,9 @@ class EvalHelper:
         """
         self.eval_hand_data, self.eval_image_patch, self.eval_target_masks_object,\
             self.movie_global_cam, self.movie_images = \
-            EvalHelper.get_eval_data(
+            self.get_eval_data(
                 eval_dataset, index, cfg, side, optimize_eval_hand)
-        self.num_eval = min(cfg.optim_multiview.num_eval, len(self.eval_image_patch))
+        self.num_eval = min(cfg.optim_mv.num_eval, len(self.eval_image_patch))
 
     def register_batch(self,
                        homan: MVHOVis,
@@ -155,7 +162,7 @@ def multiview_optimize(homan: MVHOVis,
     each pose sees a small fraction of source_bank, e.g. N=3 frames.
 
     Args:
-        cfg: cfg.optim_multiview in config/conf.yaml
+        cfg: cfg.optim_mv in config/conf.yaml
     """
     # Read out from config
     lr = optim_cfg.lr

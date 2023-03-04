@@ -87,13 +87,21 @@ homan:
             generate_on: 'hand'
             num_sphere_pts: -1
             num_sym_rots: 1
+    
+    scale_init:
+        bowl:   'est'
+        can:    'est'
+        plate:  'est'
+        cup:    'est'
+        mug:    'est'
+
+        bottle: 'one'
 
     transl_init_method: 'fingers'   # 'zero' / 'fingers'(finger centers) / 'mask'
-    scale_init_method: 'est'        # 'one' / 'xyz' / 'est'
     rotation_regularization: False  # TODO, NotImplmented
     scale_regularization: False
 
-optim_multiview:
+optim_mv:
     num_source: 100
     num_eval: 30
     num_inits: 510
@@ -122,3 +130,5 @@ optim_multiview:
             apply_to: {'bowl'}
 
     criterion: 'iou'
+
+post_refine: True

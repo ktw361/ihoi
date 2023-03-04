@@ -19,16 +19,27 @@ def parse_args():
     parser = ArgumentParser()
     parser.add_argument('--data_locate')
     parser.add_argument('--model_dir')
+    # parser.add_argument('--lw_smooth', type=float, default=1.0)
     return parser.parse_args()
 
 
 def optimize_post(homan, steps=200):
+    loss_lim = torch.tensor(1e5)
     def loss_combined(homan):
         l_ho = homan.forward_combined_sil().sum()
         l_obj_sm = homan.loss_obj_smooth().sum()
         # l_hand_sm = homan.loss_hand_smooth().sum()
         return l_ho + l_obj_sm
 
+    def loss_mano_pca(homan: HOForwarderV2Vis):
+        l_pca = homan.loss_pca_interpolation().sum()
+        l_in = homan.loss_insideness().sum()
+        l_cl = homan.loss_closeness().sum()
+        l_vhand = homan.loss_hand_smooth(hand_space=True, phy_factor=False).sum()
+        l = l_pca + l_in + l_cl + l_vhand
+        return l
+
+    """ [R|T] for hand """
     optim = torch.optim.Adam([{
         'params': [
             homan.rotations_hand,
@@ -36,19 +47,40 @@ def optimize_post(homan, steps=200):
         ],
         'lr': 1e-2
     }])
-
     with tqdm(total=steps) as loop:
         for i in range(steps):
             optim.zero_grad()
             loss = loss_combined(homan)
+            if loss > loss_lim:
+                break
             loss.backward()
             loop.set_description(f"loss: {loss.item():.3g}")
             loop.update()
             optim.step()
-    return homan
+    
+    """ mano_pca_pose """
+    optim = torch.optim.Adam([{
+        'params': [
+            homan.mano_pca_pose
+        ],
+        'lr': 1e-2
+    }])
+    with tqdm(total=steps) as loop:
+        for i in range(steps):
+            optim.zero_grad()
+            loss = loss_mano_pca(homan)
+            if loss > loss_lim:
+                break
+            loss.backward()
+            loop.set_description(f"loss: {loss.item():.3g}")
+            loop.update()
+            optim.step()
+        return homan
 
 
-def load_homan_from_mvho(eval_input, mvho, cfg):
+def load_homan_from_mvho(eval_input, mvho, cfg, 
+                         mano_pca_pose=None,
+                         mano_betas=None) -> HOForwarderV2Vis:
     images, hand_bbox_dicts, side, obj_bboxes, hand_masks, obj_masks, cat, global_cam = eval_input
 
     eval_ihoi_cam_nr_mat, eval_ihoi_cam_mat, eval_image_patch, \
@@ -56,17 +88,19 @@ def load_homan_from_mvho(eval_input, mvho, cfg):
     eval_mano_pca_pose, eval_pred_hand_betas, eval_hand_mask_patch, eval_obj_mask_patch = \
         extract_forwarder_input(
             eval_input, ihoi_box_expand=cfg.preprocess.ihoi_box_expand)
-    num_eval = min(cfg.optim_multiview.num_eval, len(eval_ihoi_cam_nr_mat))
+    num_eval = min(cfg.optim_mv.num_eval, len(eval_ihoi_cam_nr_mat))
 
+    mano_pca_pose = mano_pca_pose if mano_pca_pose is not None else eval_mano_pca_pose
+    mano_betas = mano_betas if mano_betas is not None else eval_pred_hand_betas
     homan = HOForwarderV2Vis(
         camintr=eval_ihoi_cam_nr_mat,
         ihoi_img_patch=eval_image_patch)
     homan.set_hand_params(
-        rotations_hand=eval_hand_rotation_6d,
-        translations_hand=eval_hand_translation,
+        rotations_hand=mvho.rotations_hand, #eval_hand_rotation_6d,
+        translations_hand=mvho.translations_hand, #eval_hand_translation,
         hand_side=side,
-        mano_pca_pose=eval_mano_pca_pose,
-        mano_betas=eval_pred_hand_betas)
+        mano_pca_pose=mano_pca_pose,
+        mano_betas=mano_betas)
     homan.set_hand_target(eval_hand_mask_patch)
 
     homan.set_obj_params(
@@ -99,7 +133,12 @@ def main(args):
     mvho = torch.load(mvho_path)
     eval_input = eval_dataset[index]
 
-    homan = load_homan_from_mvho(eval_input, mvho, cfg)
+    eval_helper = EvalHelper()
+    eval_helper.set_eval_data(eval_dataset, index, cfg, eval_input.side,
+                              optimize_eval_hand=cfg.homan.optimize_eval_hand)
+    homan = load_homan_from_mvho(eval_input, mvho, cfg,
+                                 mano_pca_pose=eval_helper.eval_mano_pca_pose,
+                                 mano_betas=eval_helper.eval_mano_betas)
 
     homan.register_combined_target()
     pre_metrics = homan.eval_metrics(unsafe=True, avg=True)

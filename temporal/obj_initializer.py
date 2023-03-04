@@ -164,9 +164,9 @@ class ObjectPoseInitializer:
         scale_init_method = self.scale_init_method
         num_inits = self.num_inits
         if scale_init_method == 'one':
-            scale_init = torch.ones([num_inits], device=self.device)
+            scale_inits = torch.ones([num_inits], device=self.device)
         elif scale_init_method == 'xyz':
-            scale_init = torch.new_ones([num_inits, 3], device=self.device)
+            scale_inits = torch.new_ones([num_inits, 3], device=self.device)
         elif scale_init_method == 'est':
             global_bboxes = self._in_data.global_bbox
             verts_hand_global = self._in_data.v_hand_global
