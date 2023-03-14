@@ -373,12 +373,6 @@ class MVHO(nn.Module):
             hand_data.rotations_hand.detach().clone(), requires_grad=True)
         self.translations_hand = nn.Parameter(
             hand_data.translations_hand.detach().clone(), requires_grad=True)
-        # self.register_buffer(
-        #     'rotations_hand',
-        #     hand_data.rotations_hand.detach().clone().requires_grad_(False))
-        # self.register_buffer(
-        #     'translations_hand',
-        #     hand_data.translations_hand.detach().clone().requires_grad_(False))
         self.register_buffer(
             'v_hand',
             hand_data.v_hand_global.detach().clone().requires_grad_(False))
@@ -769,11 +763,29 @@ class MVHOImpl(MVHO):
         if phy_factor:
             l_collision = self.physical_factor() * l_collision
         return l_collision
-
-    def penetration_depth(self):
+    
+    def compute_hand_iou(self, v_hand=None, homan=None):
+        """ Borrowing keep_mask_hand from post!
+        Args:
+            homan: HOForwarderV2 which stores the same images as this class
         """
+        v_hand = self.v_hand if v_hand is None else v_hand
+        rend = self.renderer(
+            v_hand,
+            self.faces_hand,
+            K=self.camintr,
+            mode="silhouettes")
+        image = homan.keep_mask_hand * rend
+
+        ious = batch_mask_iou(image, homan.ref_mask_hand)
+        return ious
+
+    def penetration_depth(self, h2o_only=True) -> float:
+        """
+        Max penetration depth over all frames,
+        report in mm
         Returns:
-            - hand into object (N*T)
+            - hand into object
             - object into hand
         """
         f_hand = self.faces_hand[0]
@@ -784,9 +796,14 @@ class MVHOImpl(MVHO):
         sdfl = scenesdf.SDFSceneLoss([f_hand, f_obj])
         sdf_loss, sdf_meta = sdfl([v_hand, v_obj])
         # max_depths = sdf_meta['dist_values'][(1, 0)].max(1)[0]
-        h_to_o = sdf_meta['dist_values'][(1, 0)].max(1)[0]
-        o_to_h = sdf_meta['dist_values'][(0, 1)].max(1)[0] 
-        return h_to_o, o_to_h
+        h_to_o = sdf_meta['dist_values'][(1, 0)].max(1)[0].max().item()
+        o_to_h = sdf_meta['dist_values'][(0, 1)].max(1)[0].max().item()
+        h_to_o = h_to_o * 1000
+        o_to_h = o_to_h * 1000
+        if h2o_only:
+            return h_to_o
+        else:
+            return h_to_o, o_to_h
 
     """ Contact regions """
 
@@ -979,7 +996,8 @@ class MVHOImpl(MVHO):
 
         return tot_loss
     
-    def eval_metrics(self):
+    def eval_metrics(self, unsafe=False, avg=False,
+                     post_homan=None):
         """ Evaluate metric on ALL frames
 
         Returns: dict
@@ -989,14 +1007,27 @@ class MVHOImpl(MVHO):
         with torch.no_grad():
             v_hand = self.v_hand
             v_obj = self.get_verts_object()
-            _, iou, _ = self.forward_obj_pose_render(
+            _, oious, _ = self.forward_obj_pose_render(
                 v_obj=v_obj, loss_only=False)
             max_min_dist = self.max_min_dist(
                 v_hand=v_hand, v_obj=v_obj)
+            if unsafe:
+                pd_h2o = self.penetration_depth(h2o_only=True)
+            if post_homan:
+                hious = self.compute_hand_iou(v_hand, homan=post_homan)
+                if avg:
+                    hious = hious.mean().item()
+        if avg:
+            oious = oious.mean().item()
+
         metrics = {
-            'iou': iou,
+            'oious': oious,
             'max_min_dist': max_min_dist,
         }
+        if unsafe:
+            metrics['pd_h2o'] = pd_h2o
+        if post_homan:
+            metrics['hious'] = hious
         return metrics
 
 
@@ -1143,7 +1174,9 @@ class MVHOVis(MVHOImpl):
         return trimesh.Scene(scene_geoms)
 
     def to_scene(self, pose_idx, scene_idx=-1,
-                 show_axis=False, viewpoint='nr', **mesh_kwargs):
+                 show_axis=False, viewpoint='nr', 
+                 scene_indices=None, disp=0.15, 
+                 **mesh_kwargs):
         """ Returns a trimesh.Scene """
         if scene_idx >= 0:
             mhand, mobj = self.get_meshes(
@@ -1163,14 +1196,14 @@ class MVHOVis(MVHOImpl):
             verts_obj = verts_obj[pose_idx]
 
         meshes = []
-        disp = 0.15  # displacement
-        for t in range(self.train_size):
+        scene_indices = scene_indices or range(self.bsize)
+        for i, t in enumerate(scene_indices):
             mhand = SimpleMesh(
                 verts_hand[t], self.faces_hand[t], tex_color=hand_color)
-            mhand.apply_translation_([t * disp, 0, 0])
+            mhand.apply_translation_([i * disp, 0, 0])
             mobj = SimpleMesh(
                 verts_obj[t], self.faces_object, tex_color=obj_color)
-            mobj.apply_translation_([t * disp, 0, 0])
+            mobj.apply_translation_([i * disp, 0, 0])
             meshes.append(mhand)
             meshes.append(mobj)
         return visualize_mesh(meshes, show_axis=show_axis, viewpoint=viewpoint)

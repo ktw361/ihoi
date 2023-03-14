@@ -21,6 +21,7 @@ hydra:
 dataset:
     version: 'v3'  # 'v2 # image_sets: '/home/skynet/Zhifan/data/epic_analysis/gt_clips.json'
     image_sets: ???  # '/home/skynet/Zhifan/epic_analysis/hos/tools/model-input-Feb03.json'
+    occlude_level: 'all' # 'all' / 'ho' / 'none'
 
 preprocess:
     ihoi_box_expand: 0.3  # 1.0

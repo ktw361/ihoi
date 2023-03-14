@@ -106,7 +106,7 @@ class EvalHelper:
             with torch.no_grad():
                 metrics = homan.eval_metrics()
 
-            iou = metrics['iou']                # bigger better
+            iou = metrics['oious']                # bigger better
             mean_iou = iou.mean(0)
             # collision = metrics['collision']    # smaller better
             max_min_dist = metrics['max_min_dist'] # smaller better
@@ -133,13 +133,13 @@ class EvalHelper:
             translations_object=t,
             rotations_object=R,
             scale_object=s)
-        pd_h2o, pd_o2h = homan.penetration_depth()
-        pd_h2o = pd_h2o.max().item()
-        pd_o2h = pd_o2h.max().item()
+        # pd_h2o, pd_o2h = homan.penetration_depth()
+        # pd_h2o = pd_h2o.max().item()
+        # pd_o2h = pd_o2h.max().item()
         best_metric = {
             'iou': results[best_idx].iou,
-            'pd_h2o': pd_h2o,
-            'pd_o2h': pd_o2h,
+            # 'pd_h2o': pd_h2o,
+            # 'pd_o2h': pd_o2h,
             'max_min_dist': results[best_idx].max_min_dist}
         return homan, best_metric
 

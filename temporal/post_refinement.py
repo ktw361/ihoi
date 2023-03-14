@@ -23,7 +23,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def optimize_post(homan, steps=200):
+def optimize_post(homan, steps=200, optim_trans_hand=True):
     loss_lim = torch.tensor(1e5)
     def loss_combined(homan):
         l_ho = homan.forward_combined_sil().sum()
@@ -40,11 +40,17 @@ def optimize_post(homan, steps=200):
         return l
 
     """ [R|T] for hand """
-    optim = torch.optim.Adam([{
-        'params': [
+    if optim_trans_hand:
+        params = [
             homan.rotations_hand,
             homan.translations_hand
-        ],
+        ]
+    else:
+        params = [
+            homan.rotations_hand
+        ]
+    optim = torch.optim.Adam([{
+        'params': params,
         'lr': 1e-2
     }])
     with tqdm(total=steps) as loop:
@@ -121,6 +127,7 @@ def main(args):
 
     image_sets = '/home/skynet/Zhifan/epic_analysis/hos/tools/model-input-Feb03.json'
     image_sets = '/home/skynet/Zhifan/epic_analysis/hos/tools/eval_100_Feb25.json'
+    image_sets = '/home/skynet/Zhifan/epic_analysis/hos/tools/eval_rand100_Mar05.json'
     eval_dataset = EpicClipDatasetV3(
         image_sets=image_sets, sample_frames=30,
         show_loading_time=True
@@ -142,7 +149,7 @@ def main(args):
 
     homan.register_combined_target()
     pre_metrics = homan.eval_metrics(unsafe=True, avg=True)
-    homan = optimize_post(homan, steps=200)
+    homan = optimize_post(homan, steps=200, optim_trans_hand=False)
     post_metrics = homan.eval_metrics(unsafe=True, avg=True)
 
     torch.save(homan, (fmt % 'post.pth'))

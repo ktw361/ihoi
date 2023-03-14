@@ -1000,22 +1000,27 @@ class HOForwarderV2Impl(HOForwarderV2):
 
         return loss
     
-    def penetration_depth(self, obj_idx=0):
-        """
-        Returns:
-            (N*T)
-        """
+    def penetration_depth(self, obj_idx=0, h2o_only=True) -> float:
+        """ Max penetration depth over all frames,
+        report in mm """
+        # My hand is always scale 1.
         f_hand = self.faces_hand[0]
         f_obj = self.faces_object
-        v_hand = self.get_verts_hand(hand_space=True)
-        v_obj = self.get_verts_object(hand_space=True)[:, obj_idx, ...]
+        v_hand = self.get_verts_hand()
+        v_obj = self.get_verts_object()[:, obj_idx, ...]
 
         sdfl = scenesdf.SDFSceneLoss([f_hand, f_obj])
-        sdf_loss, sdf_meta = sdfl([v_hand, v_obj])
-        # max_depths = sdf_meta['dist_values'][(1, 0)].max(1)[0]
-        h_to_o = sdf_meta['dist_values'][(1, 0)].max(1)[0]
-        o_to_h = sdf_meta['dist_values'][(0, 1)].max(1)[0] 
-        return h_to_o, o_to_h
+        _, sdf_meta = sdfl([v_hand, v_obj])
+        # The second max is to get the max over all frames
+        h_to_o = sdf_meta['dist_values'][(1, 0)].max(1)[0].max().item() 
+        o_to_h = sdf_meta['dist_values'][(0, 1)].max(1)[0].max().item() 
+        
+        h_to_o = h_to_o * 1000
+        o_to_h = o_to_h * 1000
+        if not h2o_only:
+            return h_to_o, o_to_h
+        else:
+            return h_to_o
     
     """ system objectives """
     def train_loss(self, cfg, print_metric=False):
@@ -1074,16 +1079,21 @@ class HOForwarderV2Impl(HOForwarderV2):
             self.sample_indices = np.arange(self.bsize)
             v_hand = self.get_verts_hand()
             v_obj = self.get_verts_object()
-            _, hious = self.loss_sil_hand(v_hand=v_hand, compute_iou=True)
-            _, oious, _ = self.forward_obj_pose_render(
-                v_obj=v_obj, loss_only=False)
-            max_min_dist = self.max_min_dist(
-                v_hand=v_hand, v_obj=v_obj)
+            if v_hand.isnan().any() or v_obj.isnan().any():
+                hious = torch.zeros([len(v_hand)])
+                oious = torch.zeros([len(v_hand)])
+                pd_h2o = 10.0
+                pd_o2h = 10.0
+                max_min_dist = 0.0
+            else:
+                _, hious = self.loss_sil_hand(v_hand=v_hand, compute_iou=True)
+                _, oious, _ = self.forward_obj_pose_render(
+                    v_obj=v_obj, loss_only=False)
+                max_min_dist = self.max_min_dist(
+                    v_hand=v_hand, v_obj=v_obj)
+                if unsafe:
+                    pd_h2o, pd_o2h = self.penetration_depth(h2o_only=False)
             self.sample_indices = cache_indices
-            if unsafe:
-                pd_h2o, pd_o2h = self.penetration_depth()
-                pd_h2o = pd_h2o.max().item()
-                pd_o2h = pd_o2h.max().item()
         
         if avg:
             hious = hious.mean().item()
@@ -1251,8 +1261,14 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
         return trimesh.Scene(scene_geoms)
 
     def to_scene(self, scene_idx=-1, obj_idx=0,
-                 show_axis=False, viewpoint='nr', **mesh_kwargs):
-        """ Returns a trimesh.Scene """
+                 show_axis=False, viewpoint='nr', 
+                 scene_indices=None, disp=0.15,
+                 **mesh_kwargs):
+        """ 
+        Args:
+            disp: displacement of between two frames
+        Returns a trimesh.Scene 
+        """
         if scene_idx >= 0:
             mhand, mobj = self.get_meshes(
                 scene_idx=scene_idx, obj_idx=obj_idx, **mesh_kwargs)
@@ -1268,14 +1284,14 @@ class HOForwarderV2Vis(HOForwarderV2Impl):
             verts_obj = self.get_verts_object(**mesh_kwargs)
 
         meshes = []
-        disp = 0.15  # displacement
-        for t in range(self.bsize):
+        scene_indices = scene_indices or range(self.bsize)
+        for i, t in enumerate(scene_indices):
             mhand = SimpleMesh(
                 verts_hand[t], self.faces_hand[t], tex_color=hand_color)
-            mhand.apply_translation_([t * disp, 0, 0])
+            mhand.apply_translation_([i * disp, 0, 0])
             mobj = SimpleMesh(
                 verts_obj[t, obj_idx], self.faces_object, tex_color=obj_color)
-            mobj.apply_translation_([t * disp, 0, 0])
+            mobj.apply_translation_([i * disp, 0, 0])
             meshes.append(mhand)
             meshes.append(mobj)
         return visualize_mesh(meshes, show_axis=show_axis, viewpoint=viewpoint)

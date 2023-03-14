@@ -157,6 +157,7 @@ class EpicClipDatasetV3(Dataset):
                  image_size=VISOR_SIZE,
                  hand_expansion=0.4,
                  crop_hand_mask=True,
+                 occlude_level='all',
                  sample_frames=20,
                  show_loading_time=False,
                  *args,
@@ -168,6 +169,8 @@ class EpicClipDatasetV3(Dataset):
                 e.g. '/home/skynet/Zhifan/htmls/hos_v3_react/hos_step5_in_progress.json'
             image_size: Tuple of (W, H)
             hand_expansion (float): size of hand bounding box after squared.
+            occlude_level: 'all', 'ho', 'none'. For Occlusion-aware loss
+                see read_v3_mask_with_occlusion()
             crop_hand_mask: If True, will crop hand mask with only pixels
                 inside hand_bbox.
             sample_frames (int):
@@ -181,6 +184,7 @@ class EpicClipDatasetV3(Dataset):
         self.sample_frames = sample_frames
         self.cat_data_mapping = io.read_json(cat_data_mapping)
         self.show_loading_time = show_loading_time
+        self.occlude_level = occlude_level
 
         # Locate frame in davis formatted folders
         self.locator = PairLocator()
@@ -348,7 +352,8 @@ class EpicClipDatasetV3(Dataset):
                 path, side_id, cid,
                 crop_hand_mask=self.crop_hand_mask,
                 crop_hand_expand=HAND_MASK_KEEP_EXPAND,
-                hand_box=self._get_hand_box(vid, frame_idx, side, expand=False))
+                hand_box=self._get_hand_box(vid, frame_idx, side, expand=False),
+                occlude_level=self.occlude_level)
 
             images.append(image)
             hand_bbox_dicts.append(hand_bbox_dict)
