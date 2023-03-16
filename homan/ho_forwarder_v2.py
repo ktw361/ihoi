@@ -992,11 +992,11 @@ class HOForwarderV2Impl(HOForwarderV2):
             vals = score[scene].detach().cpu().numpy()
             mhand, mobj = self.get_meshes(scene, obj_idx)
             colors = np.where(
-                vals[..., None] >= 0,
+                vals[0, :, None] >= 0,
                 mobj.visual.vertex_colors,
-                trimesh.visual.interpolate(vals, color_map='jet'))
+                trimesh.visual.interpolate(-vals, color_map='jet'))
             mobj.visual.vertex_colors = colors
-            return trimesh.Scene([mhand, mobj])
+            return trimesh.Scene([mhand, mobj]), vals
 
         return loss
     

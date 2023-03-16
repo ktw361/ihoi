@@ -31,6 +31,11 @@ def max_intersect_volume(homan: Union[HOForwarderV2Vis, MVHOVis],
                          ret_all=False) -> float:
     """ Max Iv of object into hand, report in cm^3
     pitch: voxel size, 0.01m == 1cm
+
+    Need this:
+    import sys
+    sys.path.append('/home/skynet/Zhifan/repos/CPF')
+    from hocontact.utils.libmesh.inside_mesh import check_mesh_contains
     """
     obj_idx = 0
     max_iv = 0
