@@ -996,7 +996,7 @@ class HOForwarderV2Impl(HOForwarderV2):
                 mobj.visual.vertex_colors,
                 trimesh.visual.interpolate(-vals, color_map='jet'))
             mobj.visual.vertex_colors = colors
-            return trimesh.Scene([mhand, mobj]), vals
+            return trimesh.Scene([mhand, mobj])
 
         return loss
     

@@ -53,34 +53,79 @@ previous:
 """
 
 class PairLocator:
-    """ locate a (vid, frame) in P01_01_0003 """
+    """ locate a (vid, frame) in P01_01_0003
+    See also ImageLocator and UnfilteredMaskLocator
+
+    Interface:
+    locator = PairLocator(
+        result_root='/home/skynet/Zhifan/data/visor-dense/480p',
+        cache_path='.cache/image_pair_index.pkl')
+    path = locator.get_path(vid, frame)
+    # path = <result_root>/P01_01_0003/frame_%10d.jpg
+    """
     def __init__(self,
                  result_root='/home/skynet/Zhifan/data/visor-dense/480p',
-                 pair_infos='/home/skynet/Zhifan/data/visor-dense/meta_infos/480p_pair_infos.txt',
-                 verbose=True):
+                 cache_path='.cache/image_pair_index.pkl',
+                 verbose=False):
         self.result_root = Path(result_root)
-        with open(pair_infos) as fp:
-            pair_infos = fp.readlines()
-            pair_infos = [v.strip().split(' ') for v in pair_infos]
-
-        self._build_index(pair_infos)
+        self.cache_path = cache_path
+        self._load_index()
         self.verbose = verbose
 
-    def _build_index(self, pair_infos: list):
-        """ pair_infos[i] = ['P01_01_0003', '123', '345']
-        """
-        self._all_full_frames = []
-        self._all_folders = []
+    def _load_index(self):
+        import os.path as osp
+        # cache_path = osp.join('.cache', 'pair_index.pkl')
+        if not osp.exists(self.cache_path):
+            os.makedirs(osp.dirname(self.cache_path), exist_ok=True)
+            print("First time run, generating index...")
+            _all_full_frames, _all_folders = self._build_index(
+                self.result_root)
+            with open(self.cache_path, 'wb') as fp:
+                pickle.dump((_all_full_frames, _all_folders), fp)
+            print("Index saved to", self.cache_path)
+
+        with open(self.cache_path, 'rb') as fp:
+            self._all_full_frames, self._all_folders = pickle.load(fp)
+
+    def _build_index(self, result_root):
+        import os.path as osp
+        import tqdm
+
+        def generate_pair_infos(root):
+            pair_dir = os.listdir(root)
+            dir_infos = []
+            for d in tqdm.tqdm(pair_dir):
+                l = sorted(os.listdir(osp.join(root, d)))
+                mn, mx = l[0], l[-1]
+                mn = int(re.search('\d{10}', mn)[0])
+                mx = int(re.search('\d{10}', mx)[0])
+                dir_infos.append( (d, mn, mx) )
+            def func(l):
+                x, _, _ = l
+                a, b, c = x.split('_')
+                a = a[1:]
+                a = int(a)
+                b = int(b)
+                c = int(c)
+                return a*1e7 + b*1e4 + c
+            pair_infos = sorted(dir_infos, key=func)
+            return pair_infos
+
+        pair_infos = generate_pair_infos(result_root)  # pair_infos[i] = ['P01_01_0003', '123', '345']
+
+        _all_full_frames = []
+        _all_folders = []
         for folder, st, ed in pair_infos:
             min_frame = int(st)
             index = self._hash(folder, min_frame)
-            self._all_full_frames.append(index)
-            self._all_folders.append(folder)
+            _all_full_frames.append(index)
+            _all_folders.append(folder)
 
-        self._all_full_frames = np.int64(self._all_full_frames)
-        sort_idx = np.argsort(self._all_full_frames)
-        self._all_full_frames = self._all_full_frames[sort_idx]
-        self._all_folders = np.asarray(self._all_folders)[sort_idx]
+        _all_full_frames = np.int64(_all_full_frames)
+        sort_idx = np.argsort(_all_full_frames)
+        _all_full_frames = _all_full_frames[sort_idx]
+        _all_folders = np.asarray(_all_folders)[sort_idx]
+        return _all_full_frames, _all_folders
 
     @staticmethod
     def _hash(vid: str, frame: int):
@@ -89,9 +134,6 @@ class PairLocator:
         op1, op2, op3 = map(int, (pid, sub, frame))
         index = op1 * int(1e15) + op2 * int(1e12) + op3
         return index
-    
-    def __call__(self, vid, frame):
-        return self.locate(vid, frame)
 
     def locate(self, vid, frame) -> Union[str, None]:
         """
@@ -116,6 +158,14 @@ class PairLocator:
                 print(f"Not found in {r}")
             return None
         return r
+
+    def get_path(self, vid, frame):
+        folder = self.locate(vid, frame)
+        if folder is None:
+            return None
+        fname = f"{vid}_frame_{frame:010d}.jpg"
+        fname = self.result_root/folder/fname
+        return fname
 
 
 class ClipInfo(NamedTuple):
@@ -362,7 +412,7 @@ class EpicClipDatasetV3(Dataset):
             object_masks.append(mask_obj)
 
         side_return = f"{side}_hand"
-        images = np.stack(images)
+        images = np.asarray(images)
         obj_bbox_arrs = torch.as_tensor(obj_bbox_arrs)
         hand_masks = torch.as_tensor(hand_masks)
         object_masks = torch.as_tensor(object_masks)
