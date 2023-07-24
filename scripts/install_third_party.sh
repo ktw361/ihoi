@@ -6,6 +6,8 @@ mkdir -p externals
 # my modification on relative path
 git clone https://github.com/judyye/frankmocap.git externals/frankmocap
 cd externals/frankmocap
+export CC=gcc-9
+export CXX=g++-9
 bash scripts/install_frankmocap.sh
 cd ../..
 
@@ -29,7 +31,7 @@ git clone https://github.com/hassony2/multiperson.git externals/multiperson
 pip install externals/multiperson/neural_renderer
 
 # install sdf
-pip install git+https://github.com/ktw361/sdf_pytorch
+pip install git+https://github.com/zhifanzhu/sdf_pytorch
 
 
 # install Roma rotation library

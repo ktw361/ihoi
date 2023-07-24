@@ -88,6 +88,14 @@ homan:
             generate_on: 'hand'
             num_sphere_pts: -1
             num_sym_rots: 1
+
+        arctic_ketchup:
+            method: 'upright'
+            upright_axis: '+z'
+            upright_lim: 0.6            # Allow vertical
+            generate_on: 'hand'         # bottle always face-up in the hand
+            num_sphere_pts: -1
+            num_sym_rots: 1
     
     scale_init:
         bowl:   'est'

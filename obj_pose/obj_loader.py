@@ -22,7 +22,11 @@ class OBJLoader:
         can=0.2,
         mug=0.12,
         bowl=0.12,
-        bottle=0.2
+        bottle=0.2,
+
+        arctic_box=1,
+        arctic_ketchup=1,
+        arctic_mixer=1,
     )
 
     SUFFIX = dict(
@@ -40,7 +44,11 @@ class OBJLoader:
             cup=1000,
             mug=1000,
             bowl=500,
-            bottle=500
+            bottle=500,
+
+            arctic_box=500,
+            arctic_ketchup=500,
+            arctic_mixer=500,
         )
     )
 

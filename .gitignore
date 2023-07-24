@@ -17,6 +17,9 @@ outputs/
 outputs
 data/
 
+arctic_data
+arctic_outputs
+
 weights/*
 !weights/contact_regions.json
 !weights/obj_models/

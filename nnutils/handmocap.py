@@ -206,7 +206,8 @@ def cam_from_bbox(hand_bbox,
 def extract_forwarder_input(data_elem: DataElement,
                             ihoi_box_expand: float,
                             hand_predictor=None,
-                            device='cuda'):
+                            device='cuda',
+                            debug=False):
     """
     1. Run frankmocap predictor
     2. Extract wrist poses and finger poses.
@@ -237,6 +238,8 @@ def extract_forwarder_input(data_elem: DataElement,
     pred_hand_full_pose, pred_hand_betas, pred_camera = map(
         lambda x: torch.as_tensor(one_hands[x], device=device),
         ('pred_hand_pose', 'pred_hand_betas', 'pred_camera'))
+    if debug:
+        print(pred_camera)
     hand_bbox_proc = one_hands['bbox_processed']
     rot_axisang = pred_hand_full_pose[:, :3]
     pred_hand_pose = pred_hand_full_pose[:, 3:]
