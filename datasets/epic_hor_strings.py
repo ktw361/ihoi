@@ -1,0 +1,8 @@
+EPICHOR_ROOT = './epic_hor_data/'
+EPICHOR_DETECTIONS = f'{EPICHOR_ROOT}/detections/'
+EPICHOR_SEQS = f'{EPICHOR_ROOT}/seqs/'
+EPICHOR_HANDCROP_SEQS = f'{EPICHOR_ROOT}/handcrop_seqs/'
+EPICHOR_HOCROP_SEQS = f'{EPICHOR_ROOT}/hocrop_seqs/'
+
+EPICHOR_CLIP_BOXES = f'{EPICHOR_DETECTIONS}/clip_boxes.pkl'
+EPICHOR_HOCROP_CLIP_BOXES = f'{EPICHOR_DETECTIONS}/hocrop_clip_boxes.pkl'

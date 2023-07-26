@@ -17,13 +17,15 @@ outputs/
 outputs
 data/
 
+# soft links
 arctic_data
 arctic_outputs
+epic_hor_data
+epic_analysis
 
 weights/*
 !weights/contact_regions.json
 !weights/obj_models/
-epic_analysis
 
 scratch/
 .cache/

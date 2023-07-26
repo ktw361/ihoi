@@ -274,3 +274,66 @@ def extract_forwarder_input(data_elem: DataElement,
         hand_rotation_6d, hand_translation, \
         mano_pca_pose, pred_hand_betas, \
         hand_mask_patch, obj_mask_patch
+
+
+def extract_forwarder_input_epichor(data_elem: DataElement,
+                                    ihoi_box_expand: float,
+                                    hand_predictor=None,
+                                    device='cuda',
+                                    debug=False):
+    """
+    1. Run frankmocap predictor
+    2. Extract wrist poses and finger poses.
+    [N/A] 3. Extract hand mask, w/ squaring and resizing
+    [N/A] 4. Extract Object Mask Patch
+    """
+    images = data_elem.images
+    hand_bbox_dicts = data_elem.hand_bbox_dicts
+    side = data_elem.side
+    obj_bboxes = data_elem.obj_bboxes
+    hand_masks = data_elem.hand_masks
+    object_masks = data_elem.object_masks
+    cat = data_elem.cat
+    global_cam = data_elem.global_camera
+
+    """ Process all hands """
+    if hand_predictor is None:
+        hand_predictor = __hand_predictor
+    mocap_predictions = []
+    for img, hand_dict in zip(images, hand_bbox_dicts):
+        mocap_pred = hand_predictor.regress(
+            img[..., ::-1], [hand_dict]
+        )
+        mocap_predictions += mocap_pred
+    one_hands = collate_mocap_hand(mocap_predictions, side)
+
+    """ Extract mocap_output """
+    pred_hand_full_pose, pred_hand_betas, pred_camera = map(
+        lambda x: torch.as_tensor(one_hands[x], device=device),
+        ('pred_hand_pose', 'pred_hand_betas', 'pred_camera'))
+    if debug:
+        print(pred_camera)
+    hand_bbox_proc = one_hands['bbox_processed']
+    rot_axisang = pred_hand_full_pose[:, :3]
+    pred_hand_pose = pred_hand_full_pose[:, 3:]
+    mano_pca_pose = recover_pca_pose(pred_hand_pose, side)
+
+    hand_sz = torch.ones_like(global_cam.fx) * 224
+    hand_cam = global_cam.crop(hand_bbox_proc).resize(new_w=hand_sz, new_h=hand_sz)
+    hand_rotation_6d, hand_translation = compute_hand_transform(
+        rot_axisang, pred_hand_pose, pred_camera, side,
+        hand_cam=hand_cam)
+
+    """ Extract mask input """
+    obj_mask_patch = object_masks
+    hand_mask_patch = hand_masks
+    image_patch = images
+    ihoi_cam = global_cam
+
+
+    ihoi_cam_nr_mat = ihoi_cam.to_nr(return_mat=True)
+    ihoi_cam_mat = ihoi_cam.get_K()
+    return ihoi_cam_nr_mat, ihoi_cam_mat, image_patch, \
+        hand_rotation_6d, hand_translation, \
+        mano_pca_pose, pred_hand_betas, \
+        hand_mask_patch, obj_mask_patch

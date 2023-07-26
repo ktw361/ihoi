@@ -108,7 +108,7 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
     criterion = cfg.criterion
 
     ElementType = namedtuple(
-        "ElementType", "iou collision min_dist R t s sample_indices")
+        "ElementType", "hiou oiou max_min_dist R t s sample_indices")
 
     weights = homan.rotations_hand.new_zeros([homan.bsize]) \
         if weights is None else weights
@@ -166,25 +166,18 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
                 import pudb;
                 pudb.set_trace()
             metrics = homan.eval_metrics()
-            iou = metrics['iou']                # bigger better
-            collision = metrics['collision']    # smaller better
-            min_dist = metrics['min_dist']      # smaller better
-            mean_iou = iou.mean(0)
-            mean_collision = collision.mean(0)
-            mean_min_dist = min_dist.mean(0)
-            # v_hand = homan.get_verts_hand()[homan.sample_indices, ...]
-            # v_obj = homan.get_verts_object()[homan.sample_indices, ...]
-            # mask_score = homan.forward_obj_pose_render()['mask'].sum(0)
-            # inside_score = homan.loss_insideness(
-            #     v_hand=v_hand, v_obj=v_obj).sum(0)
-            # close_score = homan.loss_closeness(
-            #     v_hand=v_hand, v_obj=v_obj).sum(0)
+            hious = metrics['hious']              # bigger better
+            oious = metrics['oious']              # bigger better
+            max_min_dist = metrics['max_min_dist']  # smaller better
+            mean_hiou = hious
+            mean_oiou = oious
+
             R = homan.rotations_object.detach().clone()
             t = homan.translations_object.detach().clone()
             s = homan.scale_object.detach().clone()
             for i in range(num_epoch_parallel):
                 element = ElementType(
-                    mean_iou[i].item(), mean_collision[i].item(), mean_min_dist[i].item(),
+                    mean_hiou[i].item(), mean_oiou[i].item(), max_min_dist,
                     R[[i]], t[[i]], s[[i]], homan.sample_indices)
                 results.append(element)
         # Update weights
@@ -201,8 +194,8 @@ def reinit_sample_optimize(homan: HOForwarderV2Vis,
 
     best_idx = final_score.argmax()
     best_metric = {
-        'iou': results[best_idx].iou, 'collision': results[best_idx].collision,
-        'min_dist': results[best_idx].min_dist}
+        'hious': results[best_idx].hiou, 'oious': results[best_idx].oiou,
+        'max_min_dist': results[best_idx].max_min_dist}
     R, t, s = results[best_idx].R, results[best_idx].t, results[best_idx].s
     homan.set_obj_transform(
         translations_object=t,

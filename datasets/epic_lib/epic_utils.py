@@ -103,7 +103,7 @@ def read_mask_with_occlusion(path: str,
     return mask_hand, mask_obj
 
 
-def read_v3_mask_with_occlusion(path: str,
+def read_v3_mask_with_occlusion(path_or_mask: str,
                                 side_id: int,
                                 cid: int,
                                 crop_hand_mask=False,
@@ -128,8 +128,13 @@ def read_v3_mask_with_occlusion(path: str,
         mask_hand, mask_obj: np.ndarray (H, W) int32
             1 fg, -1 ignore, 0 bg
     """
-    mask = Image.open(path).convert('P')
-    mask = np.asarray(mask, dtype=np.int32)
+    if isinstance(path_or_mask, str):
+        mask = Image.open(path_or_mask).convert('P')
+        mask = np.asarray(mask, dtype=np.int32)
+    elif isinstance(path_or_mask, np.ndarray) and path_or_mask.dtype == np.int32:
+        mask = path_or_mask
+    else:
+        raise ValueError
     mask_hand = np.zeros_like(mask)
     mask_obj = np.zeros_like(mask)
     mask_hand[mask == side_id] = 1
